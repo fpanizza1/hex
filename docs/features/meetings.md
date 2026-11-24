@@ -1019,6 +1019,14 @@ Record (offer, menu bar "Record Meeting", Meetings pane, or voice command)
      ├── "Recording · <title> · 12:34" -> Meetings pane
      │   └── title follows the provisional title (see Titles And Summary)
      ├── Stop & Transcribe
+     │   └── asked -> the tray, the menu bar, and `hex status` read
+     │      "stopping" until capture ends and "transcribing" takes over
+     │      (a stop asked while it is still starting reads so too);
+     │      the tray's Record and the menu bar's Record Meeting stay
+     │      disabled, and `hex meetings record` answers busy (exit 1), never
+     │      "Already recording": the recorder finishes this meeting before
+     │      it takes another (checks: meeting::runtime::tests,
+     │      control::meetings::tests)
      └── Mute Microphone / Unmute Microphone (Labs › Mute the microphone
          while recording; see Mute Microphone (Labs))
      (Idle menu bar: "Record Meeting"; "Copy Last Meeting Transcript" sits
@@ -1231,6 +1239,16 @@ meetings.stop_when_call_ends) // meetings.auto-stop
      processes on macOS, an active render session on any output in
      IAudioSessionManager2 on Windows, and a running Stream/Output/Audio
      node in PipeWire's graph on Linux
+     ├── A browser seems to keep its output open after its call while the
+     │   Mac is locked (#2685), so only a browser's playback stops counting
+     │   then: it counts for nothing while the session is locked or the Mac
+     │   is asleep (audio/system_idle.rs), never for a dimmed display, while
+     │   the microphone still counts. A native call app keeps its playback
+     │   (#835), and a muted browser call that drops the microphone while
+     │   locked ends after the 3 s absence and grace like any other call.
+     │   Each locked browser recording logs "the Mac is locked; the
+     │   browser's playback no longer keeps its call present" once. Check:
+     │   `a_locked_mac_stops_only_a_browser_s_playback_counting`
      └── A failed read counts as playing, so it never stops a recording.
          Windows and macOS skip an individual output, session, or process
          that can't be read. On Linux the graph is briefly empty right after
@@ -1241,6 +1259,10 @@ meetings.stop_when_call_ends) // meetings.auto-stop
      the app icon that drains smoothly on the frame clock and fades over its
      last 0.18 s (under Reduce Motion it steps once a second with no head;
      ControllerEvent::CallEnded carries the stop's Instant)
+     ├── CallPresence (meeting/detection.rs) counts the absence from the
+     │   first pass that saw it: a gap between passes (a stalled loop or
+     │   sleep) never restarts its 3 s. Check:
+     │   `a_gap_between_observations_never_restarts_a_call_ended_absence`
      ├── App back on the microphone or output within 30 s -> its stop is
      │   dropped; once no other automatic stop counts the notice is withdrawn
      │   and the recording capsule returns (CallEndedWithdrawn)
@@ -1494,8 +1516,13 @@ Capture sources (meeting/capture.rs)                // meetings.capture
 │   │   device UID, ahead of the saved device and the default (#1086)
 │   │   ├── App switches input mid-call -> followed within 1 s, same track
 │   │   ├── App reports no input (muted) -> keeps the one it followed
+│   │   ├── App lists an output-only device (MacBook Pro Speakers) -> never
+│   │   │   followed: only devices with input channels are chosen, so the
+│   │   │   saved device, else System default, stands in; the app's reported
+│   │   │   devices and channels are logged at debug
 │   │   └── Not reported, not listed, Hex Microphone, or won't open -> as below
 │   │      // a_meeting_follows_the_input_its_call_app_records_from,
+│   │      // a_meeting_never_follows_a_device_without_input_channels,
 │   │      // a_meeting_finds_the_input_its_call_uses_by_uid; unverified on a real call
 │   ├── System default changes, the Settings microphone changes, or a missing
 │   │   saved device returns, mid-meeting
@@ -1652,6 +1679,7 @@ Other checks: `running_output_streams_say_whether_an_app_still_plays` in
 `a_meeting_manifest_round_trips_a_microphone_warning_and_old_ones_have_none` in
 [meeting/tests.rs](../../src/meeting/tests.rs);
 `a_meeting_follows_the_input_its_call_app_records_from`,
+`a_meeting_never_follows_a_device_without_input_channels`,
 `a_microphone_that_would_not_open_is_tried_a_bounded_number_of_times`, and
 `only_an_input_the_call_app_reports_counts_as_held` in
 [meeting/capture.rs](../../src/meeting/capture.rs); and
@@ -1752,6 +1780,9 @@ While recording                                      // meetings.rolling
      provisional titles (TranscriptReader)
 
 Stop & Transcribe
+  -> The recording reads "stopping" (tray, menu bar, hex status); another
+     recording waits for it: hex meetings record answers busy until the
+     meeting is fully done (idle)
   -> Flush tails -> finish pending chunks           // usually seconds
   -> Any track that fell behind or failed -> stream its WAV in 1 s blocks
   -> Join on one timeline -> Echo suppression -> Final publication

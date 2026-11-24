@@ -105,6 +105,7 @@ Download Hex                              // setup.download-recovery
 │   ├── Windows x64 / ARM64 (UA-CH) -> hex-setup-<version>-windows-<arch>.exe + SmartScreen note
 │   ├── Linux -> copyable `curl … install-linux.sh | sh` + Arch/glibc requirement
 │   ├── Phone -> Send yourself the link
+│   ├── Scripting off -> every OS and architecture, with no tabs or switches
 │   └── Other platforms -> every build, Homebrew, the GitHub release
 ├── Website, README, installers, apps, feeds, appcast -> anoma.ly/hex/files (Worker hex-production-site):
 │   installers and appcast from the site build, dev notes from the dev-notes branch, frozen feeds and artifacts from R2
@@ -156,7 +157,8 @@ bytes Setup extracts to `%TEMP%`) has a valid, timestamped Authenticode
 signature, and Release runs it that way. No interactive install, Smart App
 Control decision, SmartScreen prompt, or first launch on a real PC has been
 observed. The Linux library diagnosis has no automated check. The site's
-platform states were captured once in headless Chromium with `?platform=`.
+platform states were captured once in headless Chromium with `?platform=`, and
+its scripting-off page with JavaScript disabled.
 
 Sources: [website](../../site/src/Download.tsx), [installer](../../packaging/windows/hex.iss),
 [release publisher](../../.github/release/release-service.sh),
@@ -3167,6 +3169,13 @@ iOS prototype (`HEXMobile`) -> Record/transcribe/copy and keyboard handoff
 │   path receives none
 └── Proof limits: unit tests only; no CI compiles the iOS targets
 Android keyboard -> English, Spanish, German and Bokmål typing assistance
+├── Hands-free dictation keeps the screen on -> the keyboard's window and Home's add Android's
+│   `FLAG_KEEP_SCREEN_ON` (no permission) while a dictation is opening, listening or transcribing,
+│   and clear it once idle, so the display timing out can't hide the IME, whose leave cancels the
+│   recording, or take Home out of sight, which cancels it too. Idle again, the screen sleeps
+│   normally. Checks: it compiles and the existing unit tests pass (`./gradlew :app:compileDebugKotlin
+│   :app:testDebugUnitTest -x prepareSpeechModel` on OpenJDK 21 and Android SDK 36), but no automated
+│   test covers the flag, and nothing was tried on a device or emulator. The repo has no Android CI.
 ├── Symbol pages -> Gboard's ?123 and =< pages (Pixel 8 emulator, API 36), the same on every
 │   layout: ?123 draws 1–0, then @ # $ _ & - + ( ) /, then * " ' : ; ! ? between the page switch
 │   and delete, and =< draws ~ ` | • √ π ÷ × § Δ, then £ ¢ € ¥ ^ ° = { } \, then % © ® ™ ✓ [ ]
@@ -3318,6 +3327,19 @@ Android keyboard -> English, Spanish, German and Bokmål typing assistance
     `SmartQuotesTest`'s 12) on 2026-11-24, on Temurin JDK 21 and Android SDK 36 (platform 36,
     build-tools 35/36, NDK 27.2.12479018); the repo has no Android CI, and nothing was tried on a
     device or emulator. `python3 scripts/code-shape.py --check` passes.
+├── Labs > Keyboard > Password manager suggestions (off) -> while Android's autofill service —
+    Bitwarden, 1Password or Google Password Manager, which must itself support Android 11's inline
+    suggestions — offers logins, one-time codes or cards for the focused field, its own chips take
+    the word slots' place in the strip: up to six, in the service's order, the pinned ones held at
+    the edge outside the scroll. A tap lets Android fill the field; Hex lays the service's views out
+    and never reads a login, a code or a card, and nothing is logged or sent. A new field, the
+    keyboard hiding or the toggle turning off clears them. Off, Hex makes no inline request, so
+    Android's normal autofill dropdown is exactly as before.
+    Checks: `./gradlew --no-daemon :app:testDebugUnitTest :app:compileDebugKotlin -x
+    prepareSpeechModel` passed 178 tests, `InlineAutofillTest`'s 3 among them (the pinned split and
+    the chip sizes), on 2026-11-24 on OpenJDK 21 (Arch Linux 21.0.13) and
+    Android SDK 36 (platform 36, build-tools 35.0.0, NDK 27.2.12479018) with compileSdk 36 and
+    minSdk 31; the repo has no Android CI, and nothing was tried on a device or emulator.
 └── Labs > Keyboard > Voice-only mode (off) -> a "Voice only" subtype of Hex, registered at runtime
     with `InputMethodManager.setAdditionalInputMethodSubtypes` (never in input_method.xml), that
     replaces the keyboard with one compact dictation bar: the strip's dot waveform and a status
