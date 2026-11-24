@@ -124,6 +124,8 @@ internal fun HexSettings(setup: Setup, speech: SpeechPreferences, typing: Typing
     val letterSymbols = remember(revision) { typing.letterSymbols }
     val numberRow = remember(revision) { typing.numberRow }
     val localCurrency = remember(revision) { typing.localCurrency }
+    val parakeet = remember(revision) { speech.parakeet }
+    val parakeetModel = ModelStore.parakeet.state.collectAsState().value
     var copied by remember(transcript) { mutableStateOf(false) }
     fun open(next: Page) {
         // A send in progress keeps the form; leaving it otherwise drops what was written.
@@ -309,6 +311,26 @@ internal fun HexSettings(setup: Setup, speech: SpeechPreferences, typing: Typing
                     Page.Feedback -> FeedbackForm(done = { open(Page.Home) })
                     Page.Labs -> {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Label(stringResource(R.string.labs_dictation), muted = true, size = 14,
+                                mod = Modifier.padding(start = 16.dp))
+                            Card {
+                                Toggle(stringResource(R.string.parakeet), stringResource(R.string.parakeet_detail),
+                                    parakeet) { speech.parakeet = it }
+                                if (parakeet || parakeetModel != ModelStore.State.Available) {
+                                    Rule()
+                                    val action = when {
+                                        !parakeet && parakeetModel == ModelStore.State.Ready -> R.string.parakeet_remove
+                                        parakeet -> modelAction(parakeetModel)
+                                        else -> null
+                                    }
+                                    Entry(stringResource(R.string.parakeet_files), parakeetStatus(parakeetModel),
+                                        action?.let { stringResource(it) } ?: "",
+                                        action?.let { a -> {
+                                            if (a == R.string.parakeet_remove) ModelStore.parakeet.delete(context)
+                                            else ModelStore.parakeet.download(context)
+                                        } })
+                                }
+                            }
                             Label(stringResource(R.string.labs_output), muted = true, size = 14,
                                 mod = Modifier.padding(start = 16.dp))
                             Card {
@@ -397,6 +419,14 @@ internal fun HexSettings(setup: Setup, speech: SpeechPreferences, typing: Typing
             }
         }
     }
+}
+
+/** Parakeet's files in Labs: their own size, else what [modelStatus] says of any model. */
+@Composable private fun parakeetStatus(state: ModelStore.State) = when (state) {
+    ModelStore.State.Ready -> stringResource(R.string.parakeet_ready)
+    ModelStore.State.Available -> stringResource(R.string.parakeet_available)
+    is ModelStore.State.Loading -> stringResource(R.string.parakeet_loading, state.percent)
+    else -> modelStatus(state)
 }
 
 @Composable internal fun Label(text: String, size: Int = 16, weight: FontWeight = FontWeight.Normal,

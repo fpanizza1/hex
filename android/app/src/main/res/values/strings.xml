@@ -113,6 +113,14 @@
     <string name="settings_labs">Labs</string>
     <string name="labs_output">Output</string>
     <string name="labs_keyboard">Keyboard</string>
+    <string name="labs_dictation">Dictation</string>
+    <string name="parakeet">Parakeet speech model</string>
+    <string name="parakeet_detail">Faster dictation, about 1.4 GB of memory. Norsk and Translate use Whisper</string>
+    <string name="parakeet_files">Parakeet model</string>
+    <string name="parakeet_ready">Downloaded · runs on this phone, even offline</string>
+    <string name="parakeet_available">Not downloaded · Whisper dictates until it is</string>
+    <string name="parakeet_loading">Downloading 670 MB · %1$d%%</string>
+    <string name="parakeet_remove">Remove</string>
     <string name="emoji_suggestions">Emoji suggestions</string>
     <string name="emoji_suggestions_detail">Show an emoji for the English word you type, such as 😊 for “smile”</string>
     <string name="signature">Signature</string>

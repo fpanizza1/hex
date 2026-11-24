@@ -75,6 +75,10 @@ internal class SpeechPreferences(context: Context) {
     var translation: Boolean
         get() = prefs.getBoolean("translation", false)
         set(value) { prefs.edit().putBoolean("translation", value).apply() }
+    /** Labs › Dictation › Parakeet: dictate with NVIDIA's Parakeet once downloaded (Whisper for what it can't). Off by default. */
+    var parakeet: Boolean
+        get() = prefs.getBoolean("parakeet", false)
+        set(value) { prefs.edit().putBoolean("parakeet", value).apply() }
     // Settings › Dictation › Lowercase: everything dictation writes, after the style.
     var lowercase: Boolean
         get() = prefs.getBoolean("lowercase", false)

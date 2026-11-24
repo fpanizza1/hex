@@ -46,12 +46,28 @@ internal object SpeechModel {
         fast.coerceIn(1, 4)
     }
 
-    @Synchronized fun prepare(app: Context) { load(app); keep() }
+    @Synchronized fun prepare(app: Context) {
+        val options = SpeechPreferences(app)
+        if (!Parakeet.wanted(app, options.spoken.code, options.translation) || Parakeet.load(app, threads) == null) load(app)
+        keep()
+    }
 
     /** The last decode stopped by [abort]: its empty result says nothing about the model. */
     @Volatile private var abandoned = 0L
 
     @Synchronized fun decode(app: Context, pcm: ShortArray, count: Int, language: String, translate: Boolean, prompt: String?, job: Long): String? {
+        // Labs › Dictation › Parakeet, for the languages it knows and never to translate; any failure keeps Whisper.
+        if (Parakeet.wanted(app, language, translate)) Parakeet.load(app, threads)?.let { recognizer ->
+            unload() // Parakeet's 1.4 GB never shares the process with Whisper's weights.
+            val started = System.nanoTime()
+            val text = runCatching { Parakeet.decode(recognizer, pcm, count) }.getOrNull()
+            // Diagnostics name the engine and timing only; no audio or text is logged. Release builds strip Log.
+            android.util.Log.d("HexSpeech", "parakeet ${if (text != null) "complete" else "failed"} in " +
+                "${(System.nanoTime() - started) / 1_000_000} ms, $count samples, $threads threads")
+            if (abandoned == job) { keep(); return null }
+            if (text != null) { keep(); return text.trim() }
+            Parakeet.unload()
+        }
         val small = load(app)
         var bytes = if (handle != 0L) Whisper.decode(handle, small, pcm, count, threads, language, translate, prompt, job) else null
         // Unusable downloaded weights fall back to the bundled model.
@@ -70,10 +86,11 @@ internal object SpeechModel {
     /** Frees the model off the caller's thread (it may wait for a dictation in progress). */
     fun releaseSoon() { timer.execute(::release) }
 
-    @Synchronized private fun release() { pending?.cancel(false); pending = null; unload() }
+    @Synchronized private fun release() { pending?.cancel(false); pending = null; unload(); Parakeet.unload() }
 
     /** Returns whether the downloaded model is the one loaded. */
     private fun load(app: Context): Boolean {
+        Parakeet.unload()
         val path = ModelStore.installed(app)?.absolutePath
         if (handle != 0L && loaded == (path ?: "")) return path != null
         unload()

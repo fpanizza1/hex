@@ -1,6 +1,8 @@
 Whisper model weights by OpenAI; Q5_1 conversion distributed by Georgi Gerganov. MIT.
 whisper.cpp and ggml by Georgi Gerganov and contributors. MIT.
 Kotlin and AndroidX: Apache License 2.0. LLVM libc++: Apache 2.0 with LLVM exceptions.
+sherpa-onnx by Xiaomi Corporation and k2-fsa contributors, Apache License 2.0, with ONNX Runtime by Microsoft, MIT (Labs › Parakeet speech model).
+Parakeet TDT 0.6B v3 by NVIDIA, CC BY 4.0, downloaded only when you choose it in Labs; int8 ONNX conversion by k2-fsa.
 The keyboard's emoji panel: the AndroidX emoji picker and Guava, by Google. Apache License 2.0.
 The keyboard's emoji suggestions: Unicode emoji-test.txt 18.0 and CLDR 49 names and
 keywords, Unicode License v3. Full licence: unicode.txt.

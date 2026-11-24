@@ -14,3 +14,7 @@
     public static int wtf(...);
     public static int println(...);
 }
+
+# libsherpa-onnx-jni (Labs › Dictation › Parakeet) reads its config objects' fields and builds results by their
+# JNI names.
+-keep class com.k2fsa.sherpa.onnx.** { *; }
