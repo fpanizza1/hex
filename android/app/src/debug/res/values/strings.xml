@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- This fork's own builds: named apart from Hex and Hex Preview in the launcher and the keyboard list. -->
+    <string name="app_name" translatable="false">Hex Fede</string>
+</resources>
