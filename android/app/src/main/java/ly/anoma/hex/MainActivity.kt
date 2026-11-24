@@ -55,6 +55,8 @@ class MainActivity : ComponentActivity() {
         /** The keyboard's Settings tool opens Hex on this page, not Home: [PAGE_KEYBOARD] names it. */
         const val EXTRA_PAGE = "ly.anoma.hex.extra.page"
         const val PAGE_KEYBOARD = "keyboard"
+        /** The keyboard's "Speed test done" line opens Labs › Diagnostics. */
+        const val PAGE_DIAGNOSTICS = "diagnostics"
     }
     private val prefs by lazy { getSharedPreferences("setup", MODE_PRIVATE) }
     private val imm by lazy { getSystemService(InputMethodManager::class.java) }
@@ -76,10 +78,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        capture = MicCapture(LocalSpeech(applicationContext),
+        capture = MicCapture(LocalSpeech(applicationContext), DictationPlace.Home,
             // Home's Dictate bar too: onStop cancels, so the screen mustn't sleep mid-dictation.
             update = { next, reason -> phase = next; notice = speechNote(reason); window.keepAwake(next) },
-            meter = {}, insert = { text, _ -> transcript = text })
+            meter = {}, insert = { text, _, _ -> transcript = text })
         page = prefs.getInt("page", 0).coerceIn(0, 3)
         // The keyboard's Settings tool opens Hex on its Keyboard page for the launch that carried the extra.
         // The task keeps its base intent, so a Recents relaunch still carries it: a restored or history
@@ -93,19 +95,20 @@ class MainActivity : ComponentActivity() {
         for (name in listOf(Settings.Secure.DEFAULT_INPUT_METHOD, Settings.Secure.ENABLED_INPUT_METHODS))
             contentResolver.registerContentObserver(Settings.Secure.getUriFor(name), false, changed)
         refresh()
-        ModelStore.refresh(this)
+        ModelStore.small.refresh(this)
+        ModelStore.english.refresh(this)
         setContent {
             HexTheme {
                 BackHandler(page in 1..2) { go(page - 1) }
-                val model = ModelStore.state.collectAsState().value
-                if (page == 3) HexSettings(setup, speech, typing, model, { ModelStore.download(this) },
+                val model = ModelStore.small.state.collectAsState().value
+                if (page == 3) HexSettings(setup, speech, typing, model, { ModelStore.small.download(this) },
                     phase, transcript, notice, ::dictate, capture::cancel, { transcript = "" }, { go(it) },
                     { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) },
                     startPage = startPage)
                 else SetupScreen(page, setup, ::go, ::askForMic,
                     enable = { enabling = true; startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) },
                     choose = { imm.showInputMethodPicker() }, model = model,
-                    download = { ModelStore.download(this) })
+                    download = { ModelStore.small.download(this) })
             }
         }
     }

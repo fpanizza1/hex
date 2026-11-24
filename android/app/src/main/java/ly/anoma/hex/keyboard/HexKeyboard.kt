@@ -30,7 +30,11 @@ import androidx.autofill.inline.v1.InlineSuggestionUi
 import kotlin.math.roundToInt
 import ly.anoma.hex.MainActivity
 import ly.anoma.hex.R
+import ly.anoma.hex.diagnostics.Diagnostics
+import ly.anoma.hex.speech.LOW_MEMORY_NOTE
 import ly.anoma.hex.speech.LocalSpeech
+import ly.anoma.hex.speech.DictationFixStore
+import ly.anoma.hex.speech.DictationPlace
 import ly.anoma.hex.speech.MicCapture
 import ly.anoma.hex.speech.Signature
 import ly.anoma.hex.speech.SpeechPhase
@@ -56,6 +60,7 @@ internal fun Context.speechNote(note: String?) = when (note) {
     "No speech heard" -> getString(R.string.keyboard_note_no_speech)
     "Speech model unavailable" -> getString(R.string.keyboard_note_model)
     "Stopped at 1 minute" -> getString(R.string.keyboard_note_minute)
+    LOW_MEMORY_NOTE -> getString(R.string.keyboard_note_low_memory)
     else -> note
 }
 
@@ -80,6 +85,9 @@ class HexKeyboard : InputMethodService() {
         feedback.voiceOnly && VoiceOnly.shows(true, subtype?.mode ?: subtypeMode())
     private lateinit var capture: MicCapture
     internal val preferences by lazy { SpeechPreferences(this) }
+    /** Labs › Learn from my fixes: the word pairs, their counts and when each was last made, and the
+     * tracker's reports. */
+    private val fixes by lazy { DictationFixStore(this) }
     internal var nextEnglish: Boolean? = null
     /** The options the dictation in flight started with: its language decides mid-sentence case. */
     internal val feedback by lazy { TypingPreferences(this) }
@@ -96,7 +104,8 @@ class HexKeyboard : InputMethodService() {
         KeyboardEngine(InputConnectionTarget(this), feedback, { layoutLanguage }, { typingLanguage },
             { SpatialDecoder(TypingModel.asset(assets, it)) },
             readPersonal = { PersonalWords.read(contentResolver, it) }, background = words,
-            emoji = EmojiWords(assets, words))
+            emoji = EmojiWords(assets, words),
+            learned = { if (preferences.learnFixes) fixes.record(it) })
     }
     private val typingChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == TypingPreferences.SUGGEST_SWEAR_WORDS) engine.swearWordsChanged()
@@ -141,7 +150,7 @@ class HexKeyboard : InputMethodService() {
         super.onCreate()
         getSharedPreferences("typing", MODE_PRIVATE).registerOnSharedPreferenceChangeListener(typingChanged)
         contentResolver.registerContentObserver(UserDictionary.Words.CONTENT_URI, true, dictionaryChanged)
-        capture = MicCapture(LocalSpeech(applicationContext), update = ::showStatus, meter = ::showLevel,
+        capture = MicCapture(LocalSpeech(applicationContext), DictationPlace.Keyboard, update = ::showStatus, meter = ::showLevel,
             insert = ::commitSpeech)
         // The lab off is the keyboard it always was: never touch the system's subtype list for it.
         if (feedback.voiceOnly) VoiceOnly.setEnabled(this, true)
@@ -219,6 +228,7 @@ class HexKeyboard : InputMethodService() {
         view?.status(capture.phase, idleHint())
         // Hex Preview's update line (Play builds have none); never in a password field.
         Updates.keyboardShown(this, engine.secure) { view?.notice(it) }
+        Diagnostics.keyboardShown(this, info.packageName, engine.secure) { view?.notice(it) }
         viewing = true
         watchClipboard()
     }
@@ -393,13 +403,14 @@ class HexKeyboard : InputMethodService() {
     private fun showLevel(level: Float) {
         bar?.setLevel(level); view?.setLevel(level)
     }
-    private fun commitSpeech(text: String, options: SpeechOptions) {
+    private fun commitSpeech(text: String, heard: String, options: SpeechOptions) {
         if (currentInputConnection == null || engine.secure || !isInputViewShown) { leaveVoiceOnly(); return }
         // Read now, so a toggle or text changed while it transcribed applies to this dictation. Hex's own
         // fields, such as Settings' practice box, never get the signature.
         val own = currentInputEditorInfo?.packageName == packageName
         val signed = if (own) null else Signature.append(text, preferences.signatureText, preferences.signature)
-        engine.insertDictation(signed ?: text, if (options.translate) "en" else options.spoken.code, signed != null)
+        engine.insertDictation(signed ?: text, if (options.translate) "en" else options.spoken.code, signed != null,
+            heard, options.learnFixes && preferences.learnFixes && !options.translate)
         leaveVoiceOnly()
     }
     private fun leaveEditor() {

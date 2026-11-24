@@ -7,6 +7,9 @@ import android.text.InputType
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import java.util.concurrent.Executor
+import ly.anoma.hex.speech.DictationEdit
+import ly.anoma.hex.speech.DictationEdits
+import ly.anoma.hex.speech.DictationText
 import ly.anoma.hex.speech.Spoken
 import ly.anoma.hex.speech.SpokenText
 import ly.anoma.hex.typing.KeyGrid
@@ -77,6 +80,9 @@ internal class KeyboardEngine(
     private val emoji: EmojiWords? = null,
     private val clock: () -> Long = { SystemClock.uptimeMillis() },
     private val main: Handler = Handler(Looper.getMainLooper()),
+    /** Labs › Learn from my fixes: what became of a tracked dictation. Null reports nothing; the tracker
+     * only follows a dictation when [insertDictation] is told to learn. */
+    private val learned: ((DictationEdit) -> Unit)? = null,
 ) {
     private companion object {
         /** The fix and the decoder's readings wait for this pause in typing: working them out costs a
@@ -132,6 +138,15 @@ internal class KeyboardEngine(
     private var dictated: Dictated? = null
     private val dropDictation = Runnable { offerUndo(null) }
     private val continuation = DictationContinuation()
+    // Labs › Learn from my fixes: the dictation just inserted, followed by anchors until it settles (60 s, a new
+    // dictation, or leaving the field). It holds text only in memory and reports only what it saw in place.
+    private val tracker = DictationTracker(target, clock) { learned?.invoke(it) }
+    private val checkDictation = object : Runnable {
+        override fun run() {
+            tracker.observe()
+            if (tracker.isTracking) main.postDelayed(this, DictationTracker.checkInterval)
+        }
+    }
     // Keyboard › Swipe typing (SwipeTyping.kt). The word a swipe just typed, until anything else changes the text:
     // the strip offers its other readings, any of which takes its place, and delete takes it back.
     private data class Swiped(val word: String, val alternatives: List<String>)
@@ -147,6 +162,7 @@ internal class KeyboardEngine(
         private set
 
     fun startInput(attribute: EditorInfo) {
+        tracker.finish()
         edited()
         editor = attribute
         val field = FieldTyping.of(attribute.inputType, attribute.imeOptions)
@@ -165,6 +181,7 @@ internal class KeyboardEngine(
     }
 
     fun updateSelection(oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int) {
+        tracker.observe()
         selStart = newSelStart; selEnd = newSelEnd
         dictated?.let { if (!undoable(it)) offerUndo(null) }
         if (oldSelStart != newSelStart || oldSelEnd != newSelEnd) {
@@ -190,7 +207,8 @@ internal class KeyboardEngine(
     /** The number row changed (Labs › Keyboard › Number row): the keys redraw with it at once. */
     fun numberRowChanged() { showPlane() }
 
-    /** The local currency changed (Labs › Keyboard › Local currency): the 123 page redraws with the phone's own. */
+    /** The local currency changed (Labs › Keyboard › Local currency): the ?123 page and d's held symbol
+     * redraw with the phone's own. */
     fun localCurrencyChanged() { showPlane() }
 
     /** Suggest swear words changed: the current word's suggestions follow at once. */
@@ -205,8 +223,19 @@ internal class KeyboardEngine(
      * reading the bundled list then if it was never read. */
     fun emojiSuggestionsChanged() { word?.let { showSuggestions(it) } }
 
-    /** Labs › Keyboard › Keyboard tools changed: the strip follows at once. */
-    fun keyboardToolsChanged() { surface?.toolsChanged() }
+    /** Labs › Keyboard › Keyboard tools changed: the strip's tools follow at once, and a field with
+     * nothing before the cursor asks for its predictions again because its sentence starters depend
+     * on the lab. A word being typed, a swipe's readings and a word Delete took back own the strip,
+     * so they are left alone. */
+    fun keyboardToolsChanged() {
+        val w = word
+        if (w != null && w.token.isEmpty() && !secure && !symbols && !swiping &&
+            swiped == null && takenBack == null && selStart == selEnd) {
+            val b = before()
+            if (b.isEmpty()) showPredictions(b)
+        }
+        surface?.toolsChanged()
+    }
 
     /** The clipboard changed: the strip's Paste tool comes or goes at once. */
     fun clipboardChanged() { surface?.toolsChanged() }
@@ -232,10 +261,11 @@ internal class KeyboardEngine(
         if (force || was != shift.uppercase) showPlane()
     }
     private fun showPlane() {
-        // A number, phone or date pad never draws a currency, so it never reads the phone's.
+        // A number, phone or date pad never draws a currency, so it never reads the phone's. The letters
+        // page reads it for d's held symbol, as the ?123 page does for its $.
         surface?.showPage(KeyboardPage(layoutLanguage(), symbols, more, shift.uppercase, shift.locked, EnterKey.from(editor),
             FieldKind.of(editor?.inputType ?: 0), pad, feedback.numberRow,
-            if (feedback.localCurrency && symbols && pad == null) LocalCurrency.local() else null))
+            if (feedback.localCurrency && pad == null) LocalCurrency.local() else null))
         // The strip's Emoji tool follows the page (Labs › Keyboard › Keyboard tools): the keys' emoji key is
         // on the letters only, never on a symbol page or a pad.
         val emoji = emojiAvailable
@@ -354,10 +384,12 @@ internal class KeyboardEngine(
         return hit
     }
 
-    /** Next words for the text before the cursor, capitalised as shift would be. */
+    /** Next words for the text before the cursor, capitalised as shift would be. An empty field with
+     * Keyboard tools on leaves the strip's line to the tools instead of sentence starters. */
     private fun showPredictions(before: String?) {
         val w = word
-        surface?.suggestions(if (w != null && before != null && !symbols && canEndWord())
+        surface?.suggestions(if (w != null && before != null && !symbols && canEndWord() &&
+            !KeyboardTools.showsInEmptyField(feedback.keyboardTools, before) { target.after(1) })
             w.predictions(before, capitalize = capsWanted()).map { shown(Suggestion(it, Suggestion.Kind.Next)) } else emptyList())
     }
 
@@ -554,6 +586,8 @@ internal class KeyboardEngine(
     }
     fun delete() {
         if (!target.connected) return
+        // Hex's own Delete is the person removing text, so a field that then empties was cleared by them.
+        tracker.keyboardRemoved()
         // A TYPE_NULL field's text can't be read back, and its editor takes no surrounding-text delete: a
         // delete is the key press itself, one per call, and a held key repeats the call as Gboard's does.
         if (keyEventEditor) {
@@ -598,11 +632,10 @@ internal class KeyboardEngine(
         resetTyping(); clearSpaces(); surface?.suggestions(emptyList())
         val info = editor
         if (info?.actionLabel != null && (info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION) == 0 &&
-            target.performEditorAction(info.actionId)) return
-        if (!target.defaultEditorAction()) {
-            if (keyEventEditor) target.sendKey(KeyEvent.KEYCODE_ENTER)
-            else type("\n")
-        }
+            target.performEditorAction(info.actionId)) { tracker.sent(); return }
+        if (target.defaultEditorAction()) { tracker.sent(); return }
+        if (keyEventEditor) target.sendKey(KeyEvent.KEYCODE_ENTER)
+        else type("\n")
     }
 
     /** A space-bar slide starts moving the cursor: the word in progress stays as typed. A field whose text
@@ -623,16 +656,24 @@ internal class KeyboardEngine(
     /** The delete slide lifted with words selected: they go. */
     fun deleteSelection() {
         if (!target.connected) return
+        tracker.keyboardRemoved()
         edited()
         target.commit(""); resetTyping(); surface?.suggestions(emptyList())
     }
 
     /** Dictation starts: the word in progress is left as typed. The signed dictation before still makes this
-     * one stand alone, so its continuation is kept. */
-    fun clearForDictation() { offerUndo(null); resetTyping(); clearSpaces(); surface?.suggestions(emptyList()) }
+     * one stand alone, so its continuation is kept. The dictation before is judged now, before this one's text
+     * reaches the field. */
+    fun clearForDictation() {
+        tracker.settle(); scheduleDictationCheck()
+        offerUndo(null); resetTyping(); clearSpaces(); surface?.suggestions(emptyList())
+    }
 
     /** The editor or the keyboard went away: forget the word, never carry it to the next field. */
-    fun leave() { edited(); resetTyping(); clearSpaces(); word = null; surface?.suggestions(emptyList()) }
+    fun leave() {
+        tracker.finish(); main.removeCallbacks(checkDictation)
+        edited(); resetTyping(); clearSpaces(); word = null; surface?.suggestions(emptyList())
+    }
 
     /** Dictated text with only the separators missing at the cursor; mid-sentence its first word loses
      * the capital Whisper gave it ([SpokenText.continuing], [language] as dictated or "en" translated).
@@ -640,9 +681,12 @@ internal class KeyboardEngine(
      * usual, with the signature on a line of its own. The next dictation starts on a new line below that
      * signature while the signed text is still right before the cursor, so it is never lowercased or
      * spaced onto the signature line. */
-    fun insertDictation(text: String, language: String?, signature: Boolean = false) {
+    fun insertDictation(text: String, language: String?, signature: Boolean = false, heard: String? = null,
+                        learn: Boolean = false) {
         if (!target.connected) return
         val before = if (secure) null else target.before(maxOf(64, continuation.reach))
+        // The lab's anchors; off, the single character spacing has always read.
+        val after = target.after(if (learn) DictationTracker.anchorLength else 1)
         val standalone = continuation.standalone(before)
         val joinable = !signature && !standalone
         val shaped = if (!joinable) text else {
@@ -655,12 +699,25 @@ internal class KeyboardEngine(
         }
         // Spacing is decided on the straight quotes, as it always was, so a dictation's spacing is
         // unchanged: the same smart quotes as the keys and the strip then go in with their spacing.
-        val spaced = dictationInsertion(shaped, before, target.after(1)?.firstOrNull(), standalone)
+        val spaced = dictationInsertion(shaped, before, after?.firstOrNull(), standalone)
         val result = if (smartQuotesHere()) SmartQuotes.text(spaced, before?.lastOrNull()) else spaced
+        // The dictation before is judged against the field as it is now, never the one this call is about to add.
+        tracker.settle()
         if (result.isNotEmpty() && target.commit(result)) {
             continuation.record(if (signature) result else null)
             if (!secure) offerUndo(Dictated(result, target.after(16).orEmpty()))
+            val words = DictationText.words(result).size
+            // A signed dictation carries a line Hex added, not just what was said: it is never tracked.
+            if (learn && !signature && heard != null && !secure && wordField && !keyEventEditor && learnsTyping &&
+                words in 1..DictationEdits.maxWords) tracker.inserted(heard, result, before, after)
+            scheduleDictationCheck()
         }
+    }
+
+    /** Keeps the tracker's clock while it follows a dictation or holds one for a redictation. */
+    private fun scheduleDictationCheck() {
+        main.removeCallbacks(checkDictation)
+        if (tracker.isTracking) main.postDelayed(checkDictation, DictationTracker.checkInterval)
     }
 
     /** Whether the strip's Undo tool can revert the last autocorrection: it is still right before the
@@ -695,6 +752,7 @@ internal class KeyboardEngine(
         val d = dictated ?: return
         offerUndo(null)
         if (undoable(d) && replace(d.text, "")) {
+            tracker.undone()
             resetTyping(); clearSpaces(); showPredictions(before())
         }
     }
@@ -832,7 +890,7 @@ internal class KeyboardEngine(
     private fun deleteSwiped(): Boolean {
         val s = swiped ?: return false
         val b = before()
-        if (swipeAnchor != b || !b.endsWith(s.word) || !replace(s.word, "")) return false
+        if (!SwipeText.takesBack(b, swipeAnchor, s.word, feedback.swipeDeleteLetters) || !replace(s.word, "")) return false
         if (dictated != null) offerUndo(null)
         continuation.clear(); clearSpaces(); resetTyping()
         val left = before()

@@ -460,6 +460,7 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig, hidden: bool
                 shutdown,
                 (!setup_ready).then_some(recognition_start),
                 listener_failure,
+                indicator.clone(),
             )
         })?;
     // A closed window is only ordered out, and AppKit keeps it on the Space
@@ -516,8 +517,8 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig, hidden: bool
                     window.update(move |ui, _| crate::rune_ui::meeting_settings_saved(ui));
                 }
             },
-            move |corner| {
-                crate::app_settings::save_meeting_indicator_corner(corner);
+            move |corner, display| {
+                crate::app_settings::save_meeting_indicator_anchor(corner, display);
                 window.update(move |ui, _| crate::rune_ui::meeting_settings_saved(ui));
             },
         )

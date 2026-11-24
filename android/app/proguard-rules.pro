@@ -1,5 +1,8 @@
-# libhexspeech resolves this class and method by their JNI names.
+# libhexspeech and libhexenglish resolve these classes and methods by their JNI names.
 -keep class ly.anoma.hex.speech.Whisper {
+    native <methods>;
+}
+-keep class ly.anoma.hex.speech.Parakeet {
     native <methods>;
 }
 
@@ -14,7 +17,3 @@
     public static int wtf(...);
     public static int println(...);
 }
-
-# libsherpa-onnx-jni (Labs › Dictation › Parakeet) reads its config objects' fields and builds results by their
-# JNI names.
--keep class com.k2fsa.sherpa.onnx.** { *; }

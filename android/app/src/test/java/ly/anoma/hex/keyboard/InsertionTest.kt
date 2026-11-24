@@ -618,7 +618,7 @@ class InsertionTest {
         val a = LetterFeedback.holds('a', "en", null, symbolsOnLetters = true)
         assertEquals("@", a.first())
         assertEquals(LetterFeedback.options('a', "en"), a.drop(1))
-        assertEquals(listOf("/"), LetterFeedback.holds('m', "en", null, symbolsOnLetters = true))
+        assertEquals(listOf("?"), LetterFeedback.holds('m', "en", null, symbolsOnLetters = true))
         assertEquals(LetterFeedback.options('e', "en"), LetterFeedback.holds('e', "en", null, symbolsOnLetters = true))
         // On the top row, with the number row hiding its digit, a letter offers Gboard's symbol first.
         assertEquals(listOf("%"), LetterFeedback.holds('q', "en", null, symbolsOnLetters = true, topRow = true))
@@ -814,5 +814,15 @@ class InsertionTest {
         retries.tookBack("there", "Hello world ")
         retries.forget()
         assertEquals(readings, retries.typing(readings, "Hello world "))
+    }
+
+    // Labs › Keyboard › Delete swiped words letter by letter: on, delete after a swipe is an ordinary one.
+    @Test fun deleteTakesASwipedWordBackOnlyWhereTheSwipeLeftItAndOnlyWithTheLabOff() {
+        assertTrue(SwipeText.takesBack("Hello world", "Hello world", "world", letterByLetter = false))
+        assertFalse(SwipeText.takesBack("Hello world", "Hello world", "world", letterByLetter = true))
+        // The text changed or the cursor moved since the swipe: the word is ordinary text by then.
+        assertFalse(SwipeText.takesBack("Hello worl", "Hello world", "world", letterByLetter = false))
+        assertFalse(SwipeText.takesBack("Hello world", null, "world", letterByLetter = false))
+        assertFalse(SwipeText.takesBack("Hello world!", "Hello world!", "world", letterByLetter = false))
     }
 }

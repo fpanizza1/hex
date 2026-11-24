@@ -45,35 +45,6 @@ val prepareSpeechModel by tasks.registering {
     }
 }
 
-// Labs › Dictation › Parakeet's engine: sherpa-onnx (Apache 2.0) with ONNX Runtime (MIT) linked in, k2-fsa's own
-// release AAR, pinned by SHA-256 and fetched at build time like the bundled model. Its library loads only when
-// Parakeet first dictates; a phone that never turns the lab on never maps it.
-val sherpaVersion = "2.0.3"
-val sherpaSha256 = "7744a3a8f08f017d59c2d8ed8d9b700345561f5abe9f4e06dc6eaef3a0b977b4"
-val sherpaAar = layout.buildDirectory.file("generated/sherpa/sherpa-onnx-static-link-onnxruntime-$sherpaVersion.aar")
-val prepareSherpa by tasks.registering {
-    val url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaVersion/sherpa-onnx-static-link-onnxruntime-$sherpaVersion.aar"
-    inputs.property("url", url)
-    inputs.property("sha256", sherpaSha256)
-    outputs.file(sherpaAar)
-    doLast {
-        val file = sherpaAar.get().asFile
-        file.parentFile.mkdirs()
-        val part = Files.createTempFile(file.parentFile.toPath(), "sherpa", ".part")
-        try {
-            val digest = MessageDigest.getInstance("SHA-256")
-            URI(url).toURL().openConnection().apply { connectTimeout = 30_000; readTimeout = 120_000 }
-                .getInputStream().use { stream ->
-                    DigestInputStream(stream, digest).use { input -> Files.newOutputStream(part).use { input.copyTo(it) } }
-                }
-            check(digest.digest().joinToString("") { "%02x".format(it) } == sherpaSha256) { "sherpa-onnx AAR checksum mismatch" }
-            Files.move(part, file.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        } finally {
-            Files.deleteIfExists(part)
-        }
-    }
-}
-
 // Resolve the key relative to its private properties file, never to a checked-in path.
 val uploadProperties = providers.environmentVariable("HEX_ANDROID_KEYSTORE_PROPERTIES").orNull
     ?.let(::file) ?: File(System.getProperty("user.home"), ".config/hex-android/keystore.properties")
@@ -125,10 +96,12 @@ android {
         versionCode = 5
         versionName = "0.2.2"
         buildConfigField("String", "FEEDBACK_KEY", "\"$feedbackKey\"")
+        // Labs › Diagnostics: Hex Preview and debug builds (below), never the Play release.
+        buildConfigField("boolean", "DIAGNOSTICS", "false")
         ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild.cmake {
             arguments += listOf("-DANDROID_STL=c++_static", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
-            targets += "hexspeech"
+            targets += listOf("hexspeech", "hexenglish")
         }
     }
     externalNativeBuild.cmake {
@@ -150,6 +123,7 @@ android {
         }
     }
     buildTypes {
+        debug { buildConfigField("boolean", "DIAGNOSTICS", "true") }
         release {
             isDebuggable = false
             isJniDebuggable = false
@@ -166,10 +140,14 @@ android {
             signingConfig = signingConfigs.getByName("preview")
             matchingFallbacks += "release"
             resValue("string", "update_channel", previewChannel)
+            buildConfigField("boolean", "DIAGNOSTICS", "true")
         }
     }
     sourceSets["debug"].java.srcDir("src/play/java")
     sourceSets["release"].java.srcDir("src/play/java")
+    // Labs › Diagnostics' speed-test clip ships only where the page does.
+    sourceSets["debug"].assets.srcDir("src/diagnostics/assets")
+    sourceSets["preview"].assets.srcDir("src/diagnostics/assets")
     packaging.resources.excludes += "DebugProbesKt.bin"
     buildFeatures { compose = true; buildConfig = true }
     androidResources { noCompress += listOf("bin", "hextm", "valid", "capitals") }
@@ -219,7 +197,26 @@ val verifyTypingModels by tasks.registering {
         }
     }
 }
-tasks.named("preBuild").configure { dependsOn(prepareSpeechModel, prepareSherpa, verifyInter, verifyTypingModels) }
+tasks.named("preBuild").configure { dependsOn(prepareSpeechModel, verifyInter, verifyTypingModels) }
+// Every native library the APK ships, Hex's own and AndroidX's prebuilt ones, gets the check Hex's get when they are built
+// (src/main/cpp/check-imports.cmake): no call that starts, replaces or traces a process or loads a shared object, and
+// nothing exported but JNI entry points.
+tasks.matching { it.name.matches(Regex("merge(Debug|Release|Preview)NativeLibs")) }.configureEach {
+    val script = file("src/main/cpp/check-imports.cmake")
+    val cmake = android.sdkDirectory.resolve("cmake/3.22.1/bin/cmake")
+    val nm = android.ndkDirectory.resolve("toolchains/llvm/prebuilt").listFiles().orEmpty().map { it.resolve("bin/llvm-nm") }
+    doLast {
+        val tool = nm.first { it.canExecute() }
+        val libraries = outputs.files.asFileTree.matching { include("**/*.so") }.files
+        check(libraries.isNotEmpty()) { "No native libraries to check" }
+        for (library in libraries) {
+            val process = ProcessBuilder(cmake.path, "-DNM=${tool.path}", "-DLIB=${library.path}", "-P", script.path)
+                .redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText()
+            check(process.waitFor() == 0) { output.trim() }
+        }
+    }
+}
 
 dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
@@ -229,6 +226,5 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     // The keyboard's emoji panel (Apache 2.0): categories, recents and skin tones, all kept on the device.
     implementation("androidx.emoji2:emoji2-emojipicker:1.7.0")
-    implementation(files(sherpaAar).builtBy(prepareSherpa))
     testImplementation("junit:junit:4.13.2")
 }
