@@ -3030,7 +3030,11 @@ iOS prototype (`HEXMobile`) -> Record/transcribe/copy and keyboard handoff
 │   its nine accented vowels held on a e i o u (á é í ó ö ő ú ü ű), the iPhone's `hu`
 │   dictionary behind its autocorrect (a missing accent is the cheapest fix, "koszonom" →
 │   "köszönöm", while a word of its own such as "meg" keeps its spelling), English as its
-│   bilingual partner through the Latin-script rule, and no typing (spatial) model
+│   bilingual partner through the Latin-script rule, and no typing (spatial) model.
+│   Dutch (Nederlands) is one too: QWERTY on the English letters with Apple's Dutch held
+│   accents (ë ï é ó and the rest, j́ on J, no ĳ), AZERTY and QWERTZ offered, the iPhone's
+│   `nl` dictionary behind its autocorrect, English as its bilingual partner, and no typing
+│   model, so no spatial autocorrect or swipe typing in Dutch
 ├── Korean keyboard (두벌식) (off by default, `experiments.koreanKeyboard`): Settings ›
 │   Experiments adds 한국어 to Settings › Keyboard › Languages, typed on the standard two-set
 │   rows (ㅂㅈㄷㄱㅅㅛㅕㅑㅐㅔ / ㅁㄴㅇㄹㅎㅗㅓㅏㅣ / ㅋㅌㅊㅍㅠㅜㅡ, shift's ㅃㅉㄸㄲㅆ and ㅒㅖ, no
@@ -3248,8 +3252,19 @@ Android keyboard -> English, Spanish, German, Bokmål, French and Italian typing
 │   thread's affinity first and puts it back when the decode ends: loading a model, Parakeet's own
 │   graphs and the speed test's no-pool run keep their own placement. A mask with fewer usable cores
 │   than the pool has threads is dropped for ggml's default placement, as are a core Hex can't rate
-│   and a phone where every core counts as fast. Labs › Diagnostics' speed test runs this way as
-│   "as now", beside "threads kept ready, any core" and "new threads every graph".
+│   and a phone where every core counts as fast, and so is one the kernel refuses to pin to
+│   (`pool_mask` tries it). Labs › Diagnostics names where the threads were kept: the Speech line
+│   ("dictation threads: 4 kept ready on cpu 4-7", or "on any core"), each speed-test run and
+│   "Last dictation", read back from the decoding thread so a refused pinning reads as any core. The
+│   speed test's rows are named by what they do ("new threads every graph", "threads kept ready, any
+│   core", "threads kept ready, fast cores" where Hex can tell the cores apart, "threads kept ready,
+│   6"), the one dictation uses marked "(what dictation uses)". Each speed-test run makes its own
+│   pool on the test's thread (its workers take that thread's name, which the core sampler reads)
+│   and frees it afterwards, so no worker it made, pinned or not, outlives the run; dictation makes
+│   its pool again on the transcription thread when it next starts (`ensurePool`). Debug builds take
+│   `am start --es cpu_capacity 300,300,1024,1024` (after a force-stop) to stand in for the kernel's
+│   ratings, so the emulator can run the pinned branch; the Processor line then ends "(debug core
+│   ratings: …)".
 │   Checks: `dictationKeepsItsThreadsOnTheFastCores` in StripTextTest.kt (a MediaTek 477×4/871×3/1024
 │   phone's 0xF0, a Snapdragon 695's 0xC0, 0 when every core counts as fast, is unrated, is zero or
 │   there are none), and `./gradlew :app:testDebugUnitTest -x prepareSpeechModel` passed 237 tests and
