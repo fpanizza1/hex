@@ -92,6 +92,19 @@ class HexKeyboard : InputMethodService() {
         if (key == TypingPreferences.EMOJI_SUGGESTIONS) engine.emojiSuggestionsChanged()
         if (key == TypingPreferences.KEYBOARD_TOOLS) { engine.keyboardToolsChanged(); watchClipboard() }
         if (key == TypingPreferences.VOICE_ONLY) modeChanged()
+        if (key == TypingPreferences.KEY_HEIGHT) heightChanged()
+    }
+    /** Labs › Keyboard › Keyboard height changed: the keys are drawn again at once when shown and idle, else
+     * when next shown, so a dictation in progress keeps its view. */
+    private var resized = false
+    private fun heightChanged() {
+        if (view == null) return
+        if (!isInputViewShown || capture.phase != SpeechPhase.Idle) { resized = true; return }
+        setInputView(inputView())
+        engine.configureTyping()
+        view?.status(capture.phase, idleHint())
+        viewing = true
+        watchClipboard()
     }
     // The strip's Paste tool comes and goes with the clipboard (Labs › Keyboard › Keyboard tools): the
     // listener exists only while the lab is on and the input view is shown.
@@ -175,7 +188,7 @@ class HexKeyboard : InputMethodService() {
         super.onStartInputView(info, restarting)
         // A subtype or lab change may have arrived while no view existed: it shows the right one.
         val voice = voiceOnly()
-        if (voice != (bar != null) || (!voice && view == null)) setInputView(inputView())
+        if (voice != (bar != null) || (!voice && (view == null || resized))) { resized = false; setInputView(inputView()) }
         if (bar != null) {
             // A restart after the bar asked to leave (text inserted, or Android's picker standing in for a
             // switch) keeps it idle instead of recording the same field again.

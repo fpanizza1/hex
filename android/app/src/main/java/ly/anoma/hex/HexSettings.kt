@@ -34,7 +34,11 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import kotlin.math.roundToInt
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -124,6 +128,8 @@ internal fun HexSettings(setup: Setup, speech: SpeechPreferences, typing: Typing
     val letterSymbols = remember(revision) { typing.letterSymbols }
     val numberRow = remember(revision) { typing.numberRow }
     val localCurrency = remember(revision) { typing.localCurrency }
+    val keyHeight = remember(revision) { typing.keyHeight }
+    var keyHeightDraft by remember(keyHeight) { mutableFloatStateOf(keyHeight.toFloat()) }
     val parakeet = remember(revision) { speech.parakeet }
     val parakeetModel = ModelStore.parakeet.state.collectAsState().value
     var copied by remember(transcript) { mutableStateOf(false) }
@@ -361,6 +367,21 @@ internal fun HexSettings(setup: Setup, speech: SpeechPreferences, typing: Typing
                             Label(stringResource(R.string.labs_keyboard), muted = true, size = 14,
                                 mod = Modifier.padding(start = 16.dp))
                             Card {
+                                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 12.dp, bottom = 4.dp)) {
+                                    Label(stringResource(R.string.keyboard_height), weight = FontWeight.Medium)
+                                    Label(stringResource(R.string.keyboard_height_detail, keyHeightDraft.roundToInt()), size = 13, muted = true)
+                                    val ink = colorResource(R.color.ink)
+                                    Slider(keyHeightDraft, { keyHeightDraft = it },
+                                        valueRange = TypingPreferences.MIN_KEY_HEIGHT.toFloat()..TypingPreferences.MAX_KEY_HEIGHT.toFloat(),
+                                        steps = (TypingPreferences.MAX_KEY_HEIGHT - TypingPreferences.MIN_KEY_HEIGHT) / 5 - 1,
+                                        // Saved once the finger lifts: each save draws the keyboard again.
+                                        onValueChangeFinished = { typing.keyHeight = keyHeightDraft.roundToInt() },
+                                        colors = SliderDefaults.colors(thumbColor = ink, activeTrackColor = ink,
+                                            activeTickColor = colorResource(R.color.page), inactiveTrackColor = colorResource(R.color.modifier),
+                                            inactiveTickColor = ink),
+                                        modifier = Modifier.semantics { contentDescription = context.getString(R.string.keyboard_height) })
+                                }
+                                Rule()
                                 Toggle(stringResource(R.string.letter_symbols), stringResource(R.string.letter_symbols_detail),
                                     letterSymbols) { typing.letterSymbols = it }
                                 Rule()

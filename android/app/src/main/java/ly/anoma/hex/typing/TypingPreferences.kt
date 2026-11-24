@@ -40,6 +40,10 @@ internal class TypingPreferences(context: Context) {
     var numberRow: Boolean
         get() = prefs.getBoolean(NUMBER_ROW, false)
         set(value) { prefs.edit().putBoolean(NUMBER_ROW, value).apply() }
+    /** Labs › Keyboard › Keyboard height: the letter rows' height, in percent of Gboard's measured rows. */
+    var keyHeight: Int
+        get() = prefs.getInt(KEY_HEIGHT, 100).coerceIn(MIN_KEY_HEIGHT, MAX_KEY_HEIGHT)
+        set(value) { prefs.edit().putInt(KEY_HEIGHT, value.coerceIn(MIN_KEY_HEIGHT, MAX_KEY_HEIGHT)).apply() }
     /** Labs › Keyboard › Local currency: the phone's own currency on the 123 page instead of $. Off by default. */
     var localCurrency: Boolean
         get() = prefs.getBoolean(LOCAL_CURRENCY, false)
@@ -80,6 +84,9 @@ internal class TypingPreferences(context: Context) {
     companion object {
         const val SUGGEST_SWEAR_WORDS = "suggestSwearWords"
         const val NUMBER_ROW = "numberRow"
+        const val KEY_HEIGHT = "keyHeight"
+        const val MIN_KEY_HEIGHT = 70
+        const val MAX_KEY_HEIGHT = 120
         const val LOCAL_CURRENCY = "localCurrency"
         const val EMOJI_SUGGESTIONS = "emojiSuggestions"
         const val KEYBOARD_TOOLS = "keyboardTools"

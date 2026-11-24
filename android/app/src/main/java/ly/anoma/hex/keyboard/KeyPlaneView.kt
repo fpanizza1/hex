@@ -54,8 +54,11 @@ internal class KeyPlaneView(context: Context, private val ime: HexKeyboard, priv
     private val modifier = caps.modifier
     private val quiet = context.getColor(R.color.quiet)
     private val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-    private val rowHeight = px(if (landscape) KeyboardMetrics.ROW_LANDSCAPE else KeyboardMetrics.ROW)
-    private val keyHeight = px(if (landscape) KeyboardMetrics.KEY_HEIGHT_LANDSCAPE else KeyboardMetrics.KEY_HEIGHT)
+    // Labs › Keyboard › Keyboard height scales the rows; the space between keycaps stays Gboard's.
+    private val heightScale = ly.anoma.hex.typing.TypingPreferences(context).keyHeight / 100f
+    private val rowHeight = px((if (landscape) KeyboardMetrics.ROW_LANDSCAPE else KeyboardMetrics.ROW) * heightScale)
+    private val keyHeight = rowHeight - px(if (landscape) KeyboardMetrics.ROW_LANDSCAPE - KeyboardMetrics.KEY_HEIGHT_LANDSCAPE
+        else KeyboardMetrics.ROW - KeyboardMetrics.KEY_HEIGHT)
     private val insetTop = (rowHeight - keyHeight) / 2
     private val insetBottom = rowHeight - keyHeight - insetTop
     private val bottomExtra = px(if (landscape) KeyboardMetrics.BOTTOM_LANDSCAPE else KeyboardMetrics.BOTTOM)
