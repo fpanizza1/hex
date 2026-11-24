@@ -1,15 +1,55 @@
 package ly.anoma.hex.speech
 
-/** Faster English dictation (Labs): NVIDIA's Parakeet TDT-CTC 110M through transcribe.cpp, in libhexenglish.so, which
- * is loaded the first time this is used, so never while that switch is off. */
+import android.content.Context
+import com.k2fsa.sherpa.onnx.FeatureConfig
+import com.k2fsa.sherpa.onnx.OfflineModelConfig
+import com.k2fsa.sherpa.onnx.OfflineRecognizer
+import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
+import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig
+
+/** Labs › Parakeet: NVIDIA's Parakeet TDT 0.6B v3 through sherpa-onnx, off by default. It is about six times faster
+ * than Whisper small on short clips and needs about 1.4 GB of memory while loaded. It takes the 25 European
+ * languages below; Whisper still dictates whatever it leaves out (Norwegian, translation) and any decode failure.
+ * Called under [SpeechModel]'s lock only. */
 internal object Parakeet {
-    init { System.loadLibrary("hexenglish") }
-    /** A session, or 0 when it failed ([outOfMemory] says whether memory was why). */
-    external fun load(file: String, threads: Int): Long
-    external fun outOfMemory(): Boolean
-    external fun free(handle: Long)
-    /** UTF-8: the text, then one "start\tend\tword" line per word (ms), or null when it failed or [abort] stopped it.
-     * [vocabulary] is the person's own words, in order. */
-    external fun decode(handle: Long, pcm: ShortArray, count: Int, vocabulary: Array<String>?, job: Long): ByteArray?
-    external fun abort(job: Long)
+    /** The 25 European languages the model card lists. */
+    val languages = setOf("bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv",
+        "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk")
+
+    private var recognizer: OfflineRecognizer? = null
+    /** A load that failed for these files is not retried until they change or the process restarts. */
+    private var failed: List<String>? = null
+
+    /** Whether a dictation in [language] goes to Parakeet: the switch is on, the language is one it takes, and its
+     * files are on the phone. */
+    fun wanted(app: Context, language: String, translate: Boolean) =
+        SpeechPreferences(app).fastEnglish && !translate && language in languages && ModelStore.english.installed(app) != null
+
+    fun load(app: Context, threads: Int): OfflineRecognizer? {
+        recognizer?.let { return it }
+        val files = ModelStore.english.installed(app)?.map { it.absolutePath } ?: return null
+        if (files == failed) return null
+        val (encoder, decoder, joiner, tokens) = files
+        recognizer = try {
+            OfflineRecognizer(null, OfflineRecognizerConfig(
+                featConfig = FeatureConfig(sampleRate = 16000, featureDim = 80),
+                modelConfig = OfflineModelConfig(
+                    transducer = OfflineTransducerModelConfig(encoder = encoder, decoder = decoder, joiner = joiner),
+                    tokens = tokens, numThreads = threads, modelType = "nemo_transducer", debug = false),
+                decodingMethod = "greedy_search"))
+        } catch (_: Throwable) { failed = files; null }
+        return recognizer
+    }
+
+    fun decode(recognizer: OfflineRecognizer, pcm: ShortArray, count: Int): String {
+        val samples = FloatArray(count) { pcm[it] / 32768f }
+        val stream = recognizer.createStream()
+        try {
+            stream.acceptWaveform(samples, 16000)
+            recognizer.decode(stream)
+            return recognizer.getResult(stream).text
+        } finally { stream.release() }
+    }
+
+    fun unload() { recognizer?.release(); recognizer = null }
 }

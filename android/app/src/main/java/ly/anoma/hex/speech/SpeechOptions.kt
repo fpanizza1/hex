@@ -122,7 +122,8 @@ internal class SpeechPreferences(private val context: Context) {
     var vocabularyTerms: List<String>
         get() = prefs.getString("vocabularyTerms", null)?.split('\n').orEmpty().filter(String::isNotEmpty)
         set(value) { prefs.edit().putString("vocabularyTerms", VocabularySpelling.sanitize(value).joinToString("\n")).apply() }
-    // Labs › Faster English dictation, off by default: English dictations use the downloaded faster model once it is there.
+    // Labs › Parakeet, off by default: dictations in its languages use the downloaded model once it is there. The
+    // preference keeps its old name, so a phone that had the lab on keeps it on.
     var fastEnglish: Boolean
         get() = prefs.getBoolean("fastEnglish", false)
         set(value) { prefs.edit().putBoolean("fastEnglish", value).apply() }

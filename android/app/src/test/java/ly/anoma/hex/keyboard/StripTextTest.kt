@@ -19,7 +19,7 @@ import ly.anoma.hex.diagnostics.cpuRanges
 import ly.anoma.hex.diagnostics.fastCores
 import ly.anoma.hex.diagnostics.frequency
 import ly.anoma.hex.diagnostics.FASTER_MODE
-import ly.anoma.hex.diagnostics.fasterEnglishLine
+import ly.anoma.hex.diagnostics.parakeetLine
 import ly.anoma.hex.diagnostics.libraryLabel
 import ly.anoma.hex.speech.Engine
 import ly.anoma.hex.speech.fastCoreMask
@@ -235,7 +235,7 @@ class StripTextTest {
         // Faster English dictation: no encoder/decoder split, its own thread count.
         assertEquals("""
             Last dictation (durations only, held in memory until Hex's process ends; a dictation discarded with ✕ isn't counted; nothing said or typed):
-              in the keyboard, 11.0 s recorded, 10.6 s kept; faster English dictation; 4 threads; model loaded while you spoke
+              in the keyboard, 11.0 s recorded, 10.6 s kept; Parakeet; 4 threads; model loaded while you spoke
               after ✓: recording stopped 30 ms, decode started 41 ms, decode finished 231 ms, text inserted 240 ms
               decode 190 ms; processor 697 ms, 3.7× the decode's wall time
 
@@ -244,7 +244,7 @@ class StripTextTest {
         // Short of memory, today's model wrote it, and says why.
         assertTrue(lastDictationLines(DictationTimes(DictationPlace.Home, 5_000, 4_800, ModelAtTick.Loaded, 0, true, 20, 25, 2_025,
             2_030, 7_000, timings, RanOn.LowMemory, 4)).contains(
-            "4.8 s kept; standard dictation, as the phone was low on memory for faster English dictation; 4 threads, encoder window full;"))
+            "4.8 s kept; standard dictation, as the phone was low on memory for Parakeet; 4 threads, encoder window full;"))
     }
     @Test fun diagnosticsSayWhereTheModelWasAtTheTick() {
         assertEquals(ModelAtTick.Loaded, modelAtTick(tick = 100, prepared = 50, prepareLoaded = false, decodeLoaded = false))
@@ -262,13 +262,13 @@ class StripTextTest {
         val faster = Run(FASTER_MODE, 1, true, 190, 697, LongArray(0), "And so, my fellow Americans, ask not.", top, top, "cpu 0-3",
             "cpu 0-3 1.8–2.4 GHz", threads = 4)
         val report = report(null, Diagnostics.Speed.Done(listOf(standard, faster), 11.0), Diagnostics.Speed.Idle)
-        assertTrue(report.contains("  faster English dictation, run 1: 190 ms, processor 697 ms; 4 threads\n"))
+        assertTrue(report.contains("  Parakeet, run 1: 190 ms, processor 697 ms; 4 threads\n"))
         assertTrue(report.contains("    clocks while it ran: cpu 0-3 1.8–2.4 GHz"))
         assertTrue(report.contains("  text: And so my fellow Americans, ask not. (every run)\n"))
-        assertTrue(report.contains("  faster English dictation text: And so, my fellow Americans, ask not. (every run)\n"))
-        assertEquals("Faster English dictation: on, downloaded; the dictation language now uses faster dictation",
-            fasterEnglishLine(true, true, Engine.English))
-        assertEquals("Faster English dictation: on, not downloaded; the dictation language now uses standard dictation",
-            fasterEnglishLine(true, false, Engine.English))
+        assertTrue(report.contains("  Parakeet text: And so, my fellow Americans, ask not. (every run)\n"))
+        assertEquals("Parakeet: on, downloaded; this language now uses Parakeet",
+            parakeetLine(true, true, Engine.English))
+        assertEquals("Parakeet: on, not downloaded; this language now uses standard dictation",
+            parakeetLine(true, false, Engine.English))
     }
 }

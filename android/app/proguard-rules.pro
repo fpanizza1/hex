@@ -1,10 +1,10 @@
-# libhexspeech and libhexenglish resolve these classes and methods by their JNI names.
+# libhexspeech resolves this class and method by their JNI names.
 -keep class ly.anoma.hex.speech.Whisper {
     native <methods>;
 }
--keep class ly.anoma.hex.speech.Parakeet {
-    native <methods>;
-}
+
+# libsherpa-onnx-jni (Labs › Parakeet) reads its config objects' fields by their JNI names.
+-keep class com.k2fsa.sherpa.onnx.** { *; }
 
 # Drop diagnostic calls from managed release code, including dependencies.
 -assumenosideeffects class android.util.Log {

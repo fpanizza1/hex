@@ -114,17 +114,16 @@
     <string name="labs_dictation">Dictation</string>
     <!-- Labs › Dictation › Faster English dictation. Never name a speech engine or model in these. %1$d: the download's
          size in MB (ModelStore.english). -->
-    <string name="fast_english">Faster English dictation</string>
-    <string name="fast_english_detail">Several times faster after a one-time %1$d MB download. Numbers come out as words for now. Other languages are unchanged.</string>
-    <string name="fast_english_download">Download %1$d MB</string>
-    <string name="fast_english_loading">Downloading %1$d MB · %2$d%%</string>
-    <string name="fast_english_ready">Ready · %1$d MB</string>
-    <string name="fast_english_delete">Delete download</string>
-    <string name="fast_english_stopped">Download stopped</string>
-    <string name="fast_english_no_connection">No connection</string>
-    <string name="fast_english_no_space">Not enough storage</string>
-    <!-- Dictation › Speech model, while Faster English dictation is on and downloaded. -->
-    <string name="fast_english_in_use">English uses faster dictation (Labs).</string>
+    <string name="parakeet">Parakeet speech model</string>
+    <string name="parakeet_detail">Faster dictation in 25 European languages, about 1.4 GB of memory while it runs. Norsk and Translate use Whisper.</string>
+    <string name="parakeet_download">Download %1$d MB</string>
+    <string name="parakeet_loading">Downloading · %1$d%%</string>
+    <string name="parakeet_ready">Downloaded · runs on this phone, even offline</string>
+    <string name="parakeet_remove">Remove</string>
+    <string name="parakeet_stopped">Download stopped</string>
+    <string name="parakeet_no_connection">No connection</string>
+    <string name="parakeet_no_space">Not enough storage</string>
+    <string name="parakeet_in_use">Parakeet dictates in this language (Labs).</string>
     <!-- Labs › Dictation › Learn from my fixes: word pairs, counts and when each fix was last made, never
          the dictation. -->
     <string name="learn_fixes">Learn from my fixes</string>

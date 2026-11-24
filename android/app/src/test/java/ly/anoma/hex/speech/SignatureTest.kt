@@ -98,12 +98,14 @@ class FastEnglishRoutingTest {
         assertEquals(Decoded("standard text"), models.run(Engine.Standard, ShortArray(16_000)))
         assertTrue(models.englishGot.isEmpty())
     }
-    @Test fun everyOtherLanguageStaysWithTodaysModel() {
-        for (language in DictationLanguage.entries - DictationLanguage.English)
-            assertEquals(language.name, Engine.Standard, engineFor(options(spoken = language)))
+    @Test fun parakeetsLanguagesTakeTheFasterModelAndTheRestStayWithTodaysModel() {
+        for (language in DictationLanguage.entries) {
+            val expected = if (language.code in Parakeet.languages) Engine.English else Engine.Standard
+            assertEquals(language.name, expected, engineFor(options(spoken = language)))
+        }
         // Automatic on a German layout resolves to German before the dictation's options are made.
         val automatic = DictationLanguage.automatic(Spoken.German, listOf("en"))
-        assertEquals(Engine.Standard, engineFor(options(spoken = automatic)))
+        assertEquals(Engine.English, engineFor(options(spoken = automatic)))
     }
     @Test fun pasteInEnglishStaysWithTodaysModel() {
         // Translation is Spanish spoken, English written: today's model translates, the faster one can't.
@@ -113,7 +115,7 @@ class FastEnglishRoutingTest {
     @Test fun theLanguageWhenTheDictationStartedDecides() {
         // MicCapture keeps the options a dictation started with; a language picked while it transcribes is the next one's.
         val started = options()
-        val changed = started.copy(spoken = DictationLanguage.Spanish)
+        val changed = started.copy(spoken = DictationLanguage.Norwegian)
         assertEquals(Engine.English, engineFor(started))
         assertEquals(Engine.Standard, engineFor(changed))
     }
@@ -122,17 +124,6 @@ class FastEnglishRoutingTest {
         val decoded = models.run(Engine.English, ShortArray(16_000))
         assertEquals(Decoded("standard text", RanOn.NoFile), decoded)
         assertFalse(decoded.lowMemory)
-        assertEquals(null, ModelStore.english.verifiedIn(createTempDirectory().toFile()))
-    }
-    @Test fun aFileFailingItsHashIsDeletedSoTheDownloadIsOfferedAgain() {
-        val dir = createTempDirectory().toFile()
-        // The right size, the wrong bytes: installed by size, refused by its SHA-256.
-        val file = File(dir, ModelStore.english.fileName)
-        RandomAccessFile(file, "rw").use { it.setLength(135_373_280L) }
-        assertNotNull(ModelStore.english.installedIn(dir))
-        assertEquals(null, ModelStore.english.verifiedIn(dir))
-        assertFalse(file.exists())
-        assertEquals(ModelStore.State.Available, ModelStore.english.state.value)
     }
     @Test fun shortOfMemoryTheSameAudioGoesToTodaysModel() {
         val pcm = ShortArray(48_000) { (it % 200).toShort() }

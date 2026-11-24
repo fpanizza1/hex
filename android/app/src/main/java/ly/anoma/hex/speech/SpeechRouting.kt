@@ -1,13 +1,14 @@
 package ly.anoma.hex.speech
 
-/** The model a dictation runs on: today's ([Standard]) or Labs › Faster English dictation's ([English]). */
+/** The model a dictation runs on: today's ([Standard]) or Labs › Parakeet's ([English], the faster one). */
 internal enum class Engine { Standard, English }
 
-/** Faster English dictation takes English, and only English, decided from the options captured when the dictation
- * started, so changing the language before it finishes doesn't move it. Paste in English (translating Spanish) stays
- * with today's model: the faster one only writes the English it hears. */
+/** Parakeet takes the 25 European languages [Parakeet.languages] lists, decided from the options captured when the
+ * dictation started, so changing the language before it finishes doesn't move it. Translate stays with today's model:
+ * Parakeet only writes what it hears, in its own language. */
 internal fun engineFor(options: SpeechOptions): Engine =
-    if (options.fastEnglish && options.spoken == DictationLanguage.English && !options.translate) Engine.English else Engine.Standard
+    if (options.fastEnglish && !options.translate && options.spoken.code in Parakeet.languages) Engine.English
+    else Engine.Standard
 
 /** Why the faster model couldn't run: no verified file (missing, or failing its SHA-256), Android short of memory for
  * it (before loading it, or its load ran out), or a load that failed otherwise. */

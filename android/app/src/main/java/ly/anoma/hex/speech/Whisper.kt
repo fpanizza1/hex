@@ -4,8 +4,8 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.res.AssetManager
 import android.util.Log
+import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import ly.anoma.hex.BuildConfig
-import ly.anoma.hex.typing.TypingModel
 import java.io.File
 import java.time.LocalDate
 import java.util.concurrent.Executors
@@ -59,11 +59,9 @@ internal object SpeechModel {
     private var handle = 0L
     /** The loaded model: the downloaded file's path, "" for the bundled one, null for none. */
     private var loaded: String? = null
-    /** Faster English dictation's session, while it is the model loaded. */
-    private var english = 0L
-    /** Whether libhexenglish.so has been loaded in this process: until then nothing touches [Parakeet]. */
-    @Volatile private var englishUsed = false
-    /** Android's available memory below which an English dictation keeps today's model, when that is the one loaded,
+    /** Parakeet's recognizer, while it is the model loaded. */
+    private var recognizer: OfflineRecognizer? = null
+    /** Android's available memory below which a Parakeet dictation keeps today's model, when that is the one loaded,
      * rather than load another: loading is what gets the keyboard's process killed. */
     private const val SHORT_OF_MEMORY = 300_000_000L
 
@@ -91,7 +89,7 @@ internal object SpeechModel {
 
     @Synchronized fun prepare(app: Context, engine: Engine): Boolean {
         val before = opened
-        if (engine == Engine.Standard || openEnglish(app) != null) load(app)
+        if (engine == Engine.Standard || openFaster(app) != null) load(app)
         keep()
         return opened != before
     }
@@ -119,7 +117,7 @@ internal object SpeechModel {
         val before = opened
         decodeAt = 0L; decodeCpu = -1L; whisperRan = false
         val decoded = transcribe(engineFor(options), pcm, count, { abandoned == job },
-            english = { audio, n -> openEnglish(app) ?: decodeEnglish(app, audio, n, options.recognitionHints, job) },
+            english = { audio, n -> openFaster(app) ?: decodeFaster(app, audio, n) },
             standard = { audio, n -> decodeStandard(app, audio, n, options.spoken.code, options.translate,
                 whisperPrompt(options.recognitionHints), job) })
         val ended = System.nanoTime()
@@ -131,26 +129,17 @@ internal object SpeechModel {
         return decoded
     }
 
-    private fun decodeEnglish(app: Context, pcm: ShortArray, count: Int, vocabulary: List<String>, job: Long): EnglishResult {
+    private fun decodeFaster(app: Context, pcm: ShortArray, count: Int): EnglishResult {
         decodeStarts()
-        return Parakeet.decode(english, pcm, count, vocabulary.takeIf { it.isNotEmpty() }?.toTypedArray(), job)
-            ?.decodeToString()?.let { decoded ->
-                // A formatting step never costs a dictation: if it fails, the model's text goes out as it came.
-                try {
-                    SentenceEnds.restore(decoded, pcm, count) { word -> lowercaseEnglish(app, word) }
-                } catch (e: Exception) {
-                    Log.w("HexSpeech", "sentence ends skipped: ${e.javaClass.simpleName}")
-                    decoded.substringBefore('\n')
-                }
-            }?.trim()
-            ?.let(EnglishResult::Text) ?: EnglishResult.Failed
-    }
-
-    /** English's typing model, memory-mapped from the APK, for [SentenceEnds]: opened on the first English dictation. */
-    private var englishWords: TypingModel? = null
-    private fun lowercaseEnglish(app: Context, word: String): Boolean {
-        val model = englishWords ?: TypingModel.asset(app.assets, "en").also { englishWords = it }
-        return model.index(word) >= 0 && (model.capitals?.percent(word) ?: -1) < 0
+        val ready = recognizer ?: return EnglishResult.Failed
+        return try {
+            Parakeet.decode(ready, pcm, count).trim().let { text ->
+                if (text.isEmpty()) EnglishResult.Failed else EnglishResult.Text(text)
+            }
+        } catch (e: Exception) {
+            Log.w("HexSpeech", "parakeet decode failed: ${e.javaClass.simpleName}")
+            EnglishResult.Failed
+        }
     }
 
     private fun decodeStandard(app: Context, pcm: ShortArray, count: Int, language: String, translate: Boolean, prompt: String?, job: Long): String? {
@@ -190,14 +179,14 @@ internal object SpeechModel {
             Whisper.threadPool(handle, SpeechModel.threads, poolMask)
         }
     }
-    /** Labs › Diagnostics' speed test with Faster English dictation's model, as an English dictation with that switch on
-     * runs it (its own thread count, SentenceEnds included); null when that model isn't downloaded or failed. Opening it
-     * frees today's model, as a dictation would; the timing starts once it is open. */
+    /** Labs › Diagnostics' speed test with Parakeet's model, as a dictation with that switch on runs it (its own
+     * thread count); null when that model isn't downloaded or failed. Opening it frees today's model, as a dictation
+     * would; the timing starts once it is open. */
     @Synchronized fun measureEnglish(app: Context, pcm: ShortArray, job: Long): Measured? {
-        if (ModelStore.english.installed(app) == null || openEnglish(app) != null) return null
+        if (ModelStore.english.installed(app) == null || openFaster(app) != null) return null
         val cpu = android.os.Process.getElapsedCpuTime()
         val started = System.nanoTime()
-        val result = decodeEnglish(app, pcm, pcm.size, emptyList(), job)
+        val result = decodeFaster(app, pcm, pcm.size)
         val wall = (System.nanoTime() - started) / 1_000_000
         val processor = android.os.Process.getElapsedCpuTime() - cpu
         keep()
@@ -208,18 +197,18 @@ internal object SpeechModel {
 
     /** Ends [job]'s decode at whisper.cpp's next check (after an encoder pass or a token). Not under the lock,
      * which that decode holds. */
-    fun abort(job: Long) { abandoned = job; Whisper.abort(job); if (englishUsed) Parakeet.abort(job) }
+    fun abort(job: Long) { abandoned = job; Whisper.abort(job) }
 
     /** Frees the model off the caller's thread (it may wait for a dictation in progress). */
     fun releaseSoon() { timer.execute(::release) }
 
-    @Synchronized private fun release() { pending?.cancel(false); pending = null; unload(); freeEnglish() }
+    @Synchronized private fun release() { pending?.cancel(false); pending = null; unload(); freeFaster() }
 
     /** Returns whether the downloaded model is the one loaded. */
     private fun load(app: Context): Boolean {
         val path = ModelStore.small.installed(app)?.absolutePath
         if (handle != 0L && loaded == (path ?: "")) return path != null
-        unload(); freeEnglish()
+        unload(); freeFaster()
         if (path != null && open(app, path)) return true
         open(app, null)
         return false
@@ -237,21 +226,19 @@ internal object SpeechModel {
 
     private fun unload() { if (handle != 0L) Whisper.free(handle); handle = 0L; loaded = null }
 
-    /** Opens Faster English dictation's model, freeing today's; null when it is ready, else why it can't run. Its file is
-     * hashed once per process ([ModelStore.verified]): one that is missing or fails goes unused, silently. */
-    private fun openEnglish(app: Context): EnglishResult.Unavailable? {
-        if (english != 0L) return null
-        val file = ModelStore.english.verified(app) ?: return EnglishResult.Unavailable(Unready.NoFile)
+    /** Opens Parakeet's model, freeing today's; null when it is ready, else why it can't run. Missing files go
+     * unused, silently; a load that fails is not retried until they change. */
+    private fun openFaster(app: Context): EnglishResult.Unavailable? {
+        if (recognizer != null) return null
+        if (ModelStore.english.installed(app) == null) return EnglishResult.Unavailable(Unready.NoFile)
         if (handle != 0L && shortOfMemory(app)) return EnglishResult.Unavailable(Unready.LowMemory)
         unload()
-        englishUsed = true
-        english = Parakeet.load(file.absolutePath, threads)
+        recognizer = Parakeet.load(app, threads)
         opened++
-        return if (english != 0L) null
-            else EnglishResult.Unavailable(if (Parakeet.outOfMemory()) Unready.LowMemory else Unready.LoadFailed)
+        return if (recognizer != null) null else EnglishResult.Unavailable(Unready.LoadFailed)
     }
 
-    private fun freeEnglish() { if (english != 0L) Parakeet.free(english); english = 0L }
+    private fun freeFaster() { Parakeet.unload(); recognizer = null }
 
     private fun shortOfMemory(app: Context): Boolean {
         // Debug builds only: "adb shell setprop log.tag.HexLowMemory DEBUG" acts out a shortage, to see the fallback.

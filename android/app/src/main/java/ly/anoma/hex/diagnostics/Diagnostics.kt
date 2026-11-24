@@ -198,7 +198,7 @@ internal object Diagnostics {
             "Memory: ${gb(memory.totalMem)} total, ${gb(memory.availMem)} available" + if (memory.lowMemory) ", low" else "",
             "Speech: ${SpeechModel.threads} threads, $library, downloaded model " +
                 if (ModelStore.small.installed(c) != null) "installed" else "not installed",
-            fasterEnglishLine(SpeechPreferences(c).fastEnglish, ModelStore.english.installed(c) != null,
+            parakeetLine(SpeechPreferences(c).fastEnglish, ModelStore.english.installed(c) != null,
                 engineFor(SpeechPreferences(c).options(null))),
         ) + haptics(c)
     }
@@ -420,13 +420,13 @@ internal fun cgroupSummary(text: String) = text.lines().map { it.trim() }.filter
     .joinToString(" ") { it.replace(Regex("(uid|pid)_\\d+"), "$1_*") }
 
 /** The speed test's mode with Faster English dictation's model. */
-internal const val FASTER_MODE = "faster English dictation"
+internal const val FASTER_MODE = "Parakeet"
 
-/** Labs › Faster English dictation in the report: the switch, its download, and what the dictation language now uses,
- * "faster" or "standard". The only line of the report that says "faster". */
-internal fun fasterEnglishLine(on: Boolean, downloaded: Boolean, engine: Engine) =
-    "Faster English dictation: ${if (on) "on" else "off"}, ${if (downloaded) "downloaded" else "not downloaded"}; " +
-        "the dictation language now uses ${if (engine == Engine.English && downloaded) "faster" else "standard"} dictation"
+/** Labs › Parakeet in the report: the switch, its download, and what the dictation language now uses, Parakeet or
+ * standard. */
+internal fun parakeetLine(on: Boolean, downloaded: Boolean, engine: Engine) =
+    "Parakeet: ${if (on) "on" else "off"}, ${if (downloaded) "downloaded" else "not downloaded"}; " +
+        "this language now uses ${if (engine == Engine.English && downloaded) "Parakeet" else "standard dictation"}"
 
 /** Which build of the speech library runs, in words that can't be read as Faster English dictation (whose own line says
  * "faster") or name an engine. */
@@ -496,11 +496,11 @@ private fun schedLine(parts: Map<String, String>) = parts.entries.joinToString("
  * split, and after it failed the decode's time includes its try. */
 internal fun ranOn(ran: RanOn) = when (ran) {
     RanOn.Standard -> "standard dictation"
-    RanOn.Faster -> "faster English dictation"
-    RanOn.NoFile -> "standard dictation, as faster English dictation's download is missing or failed its check"
-    RanOn.LowMemory -> "standard dictation, as the phone was low on memory for faster English dictation"
-    RanOn.LoadFailed -> "standard dictation, as faster English dictation's model didn't load"
-    RanOn.FasterFailed -> "standard dictation, after faster English dictation failed (its try is in the decode's time)"
+    RanOn.Faster -> "Parakeet"
+    RanOn.NoFile -> "standard dictation, as Parakeet's files are missing or failed their check"
+    RanOn.LowMemory -> "standard dictation, as the phone was low on memory for Parakeet"
+    RanOn.LoadFailed -> "standard dictation, as Parakeet's model didn't load"
+    RanOn.FasterFailed -> "standard dictation, after Parakeet failed (its try is in the decode's time)"
 }
 
 /** The last real dictation's durations (MicCapture's [DictationTimes]), or that there was none since Hex started. */

@@ -197,7 +197,36 @@ val verifyTypingModels by tasks.registering {
         }
     }
 }
-tasks.named("preBuild").configure { dependsOn(prepareSpeechModel, verifyInter, verifyTypingModels) }
+// Labs › Dictation › Parakeet's engine: sherpa-onnx (Apache 2.0) with ONNX Runtime (MIT) linked in, k2-fsa's own
+// release AAR, pinned by SHA-256 and fetched at build time like the bundled model. Its library loads only when
+// Parakeet first dictates; a phone that never turns the lab on never maps it.
+val sherpaVersion = "2.0.3"
+val sherpaSha256 = "7744a3a8f08f017d59c2d8ed8d9b700345561f5abe9f4e06dc6eaef3a0b977b4"
+val sherpaAar = layout.buildDirectory.file("generated/sherpa/sherpa-onnx-static-link-onnxruntime-$sherpaVersion.aar")
+val prepareSherpa by tasks.registering {
+    val url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaVersion/sherpa-onnx-static-link-onnxruntime-$sherpaVersion.aar"
+    inputs.property("url", url)
+    inputs.property("sha256", sherpaSha256)
+    outputs.file(sherpaAar)
+    doLast {
+        val file = sherpaAar.get().asFile
+        file.parentFile.mkdirs()
+        val part = Files.createTempFile(file.parentFile.toPath(), "sherpa", ".part")
+        try {
+            val digest = MessageDigest.getInstance("SHA-256")
+            URI(url).toURL().openConnection().apply { connectTimeout = 30_000; readTimeout = 120_000 }
+                .getInputStream().use { stream ->
+                    DigestInputStream(stream, digest).use { input -> Files.newOutputStream(part).use { input.copyTo(it) } }
+                }
+            check(digest.digest().joinToString("") { "%02x".format(it) } == sherpaSha256) { "sherpa-onnx AAR checksum mismatch" }
+            Files.move(part, file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            Files.deleteIfExists(part)
+        }
+    }
+}
+
+tasks.named("preBuild").configure { dependsOn(prepareSpeechModel, prepareSherpa, verifyInter, verifyTypingModels) }
 // Every native library the APK ships, Hex's own and AndroidX's prebuilt ones, gets the check Hex's get when they are built
 // (src/main/cpp/check-imports.cmake): no call that starts, replaces or traces a process or loads a shared object, and
 // nothing exported but JNI entry points.
@@ -207,7 +236,12 @@ tasks.matching { it.name.matches(Regex("merge(Debug|Release|Preview)NativeLibs")
     val nm = android.ndkDirectory.resolve("toolchains/llvm/prebuilt").listFiles().orEmpty().map { it.resolve("bin/llvm-nm") }
     doLast {
         val tool = nm.first { it.canExecute() }
-        val libraries = outputs.files.asFileTree.matching { include("**/*.so") }.files
+        // sherpa-onnx and ONNX Runtime ship prebuilt from k2-fsa's AAR, so the check Hex applies to its own libraries
+        // would reject calls Microsoft's runtime makes on purpose (dlopen of its providers, among others).
+        val libraries = outputs.files.asFileTree.matching {
+            include("**/*.so")
+            exclude("**/libsherpa-onnx-jni.so", "**/libonnxruntime.so", "**/libonnxruntime4j_jni.so")
+        }.files
         check(libraries.isNotEmpty()) { "No native libraries to check" }
         for (library in libraries) {
             val process = ProcessBuilder(cmake.path, "-DNM=${tool.path}", "-DLIB=${library.path}", "-P", script.path)
@@ -219,6 +253,7 @@ tasks.matching { it.name.matches(Regex("merge(Debug|Release|Preview)NativeLibs")
 }
 
 dependencies {
+    implementation(files(sherpaAar).builtBy(prepareSherpa))
     implementation("androidx.activity:activity-compose:1.10.1")
     // The style bundle Android's password managers require to render inline suggestions in the strip.
     implementation("androidx.autofill:autofill:1.1.0")

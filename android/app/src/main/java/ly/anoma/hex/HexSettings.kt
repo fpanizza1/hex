@@ -291,7 +291,7 @@ internal fun HexSettings(setup: Setup, speech: SpeechPreferences, typing: Typing
                             Entry(stringResource(R.string.model_title), modelStatus(model), action?.let { stringResource(it) } ?: "",
                                 if (action != null) download else null)
                             if (fastEnglish && english == ModelStore.State.Ready) {
-                                Rule(); Entry(stringResource(R.string.fast_english_in_use), action = { open(Page.Labs) })
+                                Rule(); Entry(stringResource(R.string.parakeet_in_use), action = { open(Page.Labs) })
                             }
                         }
                     }
@@ -343,29 +343,27 @@ internal fun HexSettings(setup: Setup, speech: SpeechPreferences, typing: Typing
                                 mod = Modifier.padding(start = 16.dp))
                             Card {
                                 val size = ModelStore.english.megabytes
-                                                // Its line says what the download is, the numbers limit and what stays as it was, so it is
-                                // never cut off: three lines on a Pixel 8, five at font size 1.3.
-                                Toggle(stringResource(R.string.fast_english), stringResource(R.string.fast_english_detail, size),
+                                Toggle(stringResource(R.string.parakeet), stringResource(R.string.parakeet_detail),
                                     fastEnglish, noteLines = Int.MAX_VALUE) {
                                     speech.fastEnglish = it
-                                    // Off stops a download under way and drops its partial file; a finished one stays
-                                    // until Delete download.
+                                    // Off stops a download under way and drops its partial files; a finished model stays
+                                    // until Remove.
                                     if (!it && english != ModelStore.State.Ready) ModelStore.english.delete(context)
                                 }
-                                if (fastEnglish) {
+                                // Its files stay listed once they are on the phone, so Remove is reachable with the switch off.
+                                if (fastEnglish || english == ModelStore.State.Ready) {
                                     Rule()
-                                    // The download starts only on this tap, with its size on the row.
                                     when (english) {
-                                        ModelStore.State.Available -> Entry(stringResource(R.string.fast_english_download, size), value = "",
+                                        ModelStore.State.Available -> Entry(stringResource(R.string.parakeet_download, size), value = "",
                                             action = { ModelStore.english.download(context) })
-                                        is ModelStore.State.Loading -> Entry(stringResource(R.string.fast_english_loading, size, english.percent))
+                                        is ModelStore.State.Loading -> Entry(stringResource(R.string.parakeet_loading, english.percent))
                                         is ModelStore.State.Retry -> Entry(stringResource(when (english.problem) {
-                                            ModelStore.Problem.Connection -> R.string.fast_english_no_connection
-                                            ModelStore.Problem.Space -> R.string.fast_english_no_space
-                                            ModelStore.Problem.Server -> R.string.fast_english_stopped
+                                            ModelStore.Problem.Connection -> R.string.parakeet_no_connection
+                                            ModelStore.Problem.Space -> R.string.parakeet_no_space
+                                            ModelStore.Problem.Server -> R.string.parakeet_stopped
                                         }), value = stringResource(R.string.model_try_again), action = { ModelStore.english.download(context) })
-                                        ModelStore.State.Ready -> Entry(stringResource(R.string.fast_english_ready, size),
-                                            value = stringResource(R.string.fast_english_delete),
+                                        ModelStore.State.Ready -> Entry(stringResource(R.string.parakeet_ready),
+                                            value = stringResource(R.string.parakeet_remove),
                                             action = { ModelStore.english.delete(context); speech.fastEnglish = false })
                                     }
                                 }
