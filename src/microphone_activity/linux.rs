@@ -27,7 +27,20 @@ struct Node {
     output: bool,
     running: bool,
     client: Option<u64>,
+    /// The stable number a capture stream names this node by, from
+    /// `object.serial`; a node without one is named by its graph id.
+    serial: Option<String>,
     process: Process,
+}
+
+/// One application playing through PipeWire now, for Labs › Choose meeting
+/// audio: its stable id, its display name, and the node targets its running
+/// output streams answer to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlayingApplication {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) targets: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -99,6 +112,12 @@ impl Graph {
                                 .as_u64()
                                 .or_else(|| client.as_str().and_then(|client| client.parse().ok()))
                         }),
+                        serial: props.get("object.serial").and_then(|serial| {
+                            serial
+                                .as_u64()
+                                .map(|serial| serial.to_string())
+                                .or_else(|| serial.as_str().map(str::to_owned))
+                        }),
                         process: Process::from_props(&props),
                     },
                 );
@@ -132,6 +151,42 @@ impl Graph {
             })
             .collect();
         deduplicated(applications)
+    }
+
+    /// The applications with running output streams, each once, with every
+    /// node target its streams present now. Hex's own process is left out.
+    fn playing_applications(&self, own_pid: i32) -> Vec<PlayingApplication> {
+        let mut applications: Vec<PlayingApplication> = Vec::new();
+        for (node_id, node) in &self.nodes {
+            if !node.output || !node.running {
+                continue;
+            }
+            let client = node
+                .client
+                .and_then(|client| self.clients.get(&client))
+                .cloned()
+                .unwrap_or_default();
+            let process = node.process.or(&client);
+            if process.pid == Some(own_pid) {
+                continue;
+            }
+            let Some(id) = process.binary.clone().or_else(|| process.name.clone()) else {
+                continue;
+            };
+            let name = process.name.clone().unwrap_or_else(|| id.clone());
+            let target = node.serial.clone().unwrap_or_else(|| node_id.to_string());
+            match applications.iter_mut().find(|app| app.id == id) {
+                Some(app) if !app.targets.contains(&target) => app.targets.push(target),
+                Some(_) => {}
+                None => applications.push(PlayingApplication {
+                    id,
+                    name,
+                    targets: vec![target],
+                }),
+            }
+        }
+        applications.sort_by_key(|app| app.name.to_lowercase());
+        applications
     }
 
     /// Whether any running output stream belongs to `canonical_bundle_id`.
@@ -254,6 +309,18 @@ pub fn active_microphone_applications() -> Result<Vec<ActiveMicrophoneApplicatio
         .microphone_users(std::process::id() as i32))
 }
 
+/// The applications playing through PipeWire now, for Labs › Choose meeting
+/// audio. Without PipeWire this lists none until the next monitor try.
+pub(crate) fn playing_applications() -> Vec<PlayingApplication> {
+    let Ok(Some(shared)) = graph() else {
+        return Vec::new();
+    };
+    shared
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .playing_applications(std::process::id() as i32)
+}
+
 /// Whether any running PipeWire output stream belongs to the app
 /// `canonical_bundle_id`: a call keeps its output open, muted or not, and a
 /// hung-up call closes it with the microphone (#835). A graph that is not
@@ -335,6 +402,85 @@ mod tests {
         graph.apply(&json!({"id": 1, "info": null}));
         let users = graph.microphone_users(7);
         assert_eq!(users.len(), 1);
+    }
+
+    #[test]
+    fn running_output_streams_name_their_apps_and_node_targets() {
+        let mut graph = Graph::default();
+        for object in [
+            node(
+                11,
+                "running",
+                json!({"media.class": "Stream/Output/Audio", "application.process.binary": "chrome",
+                       "application.process.id": 41, "application.name": "Google Chrome",
+                       "object.serial": 88}),
+            ),
+            node(
+                12,
+                "running",
+                json!({"media.class": "Stream/Output/Audio", "application.process.binary": "chrome",
+                       "application.process.id": 41, "object.serial": "89"}),
+            ),
+            // A serial-less node is named by its graph id.
+            node(
+                13,
+                "running",
+                json!({"media.class": "Stream/Output/Audio", "application.process.binary": "spotify",
+                       "application.process.id": 42}),
+            ),
+            // Its process properties are on the client.
+            json!({"id": 20, "type": "PipeWire:Interface:Client",
+                   "info": {"props": {"application.process.binary": "teams-for-linux",
+                                      "application.process.id": "43",
+                                      "application.name": "Teams"}}}),
+            node(
+                14,
+                "running",
+                json!({"media.class": "Stream/Output/Audio", "client.id": 20, "object.serial": 90}),
+            ),
+            // Suspended, a capture stream, and Hex itself are not sources.
+            node(
+                15,
+                "suspended",
+                json!({"media.class": "Stream/Output/Audio", "application.process.binary": "discord",
+                       "application.process.id": 44}),
+            ),
+            node(
+                16,
+                "running",
+                json!({"media.class": "Stream/Input/Audio", "application.process.binary": "zoom",
+                       "application.process.id": 45}),
+            ),
+            node(
+                17,
+                "running",
+                json!({"media.class": "Stream/Output/Audio", "application.process.binary": "hex",
+                       "application.process.id": 7}),
+            ),
+        ] {
+            graph.apply(&object);
+        }
+        let apps = graph.playing_applications(7);
+        assert_eq!(
+            apps,
+            [
+                PlayingApplication {
+                    id: "chrome".into(),
+                    name: "Google Chrome".into(),
+                    targets: vec!["88".into(), "89".into()],
+                },
+                PlayingApplication {
+                    id: "spotify".into(),
+                    name: "spotify".into(),
+                    targets: vec!["13".into()],
+                },
+                PlayingApplication {
+                    id: "teams-for-linux".into(),
+                    name: "Teams".into(),
+                    targets: vec!["90".into()],
+                },
+            ]
+        );
     }
 
     /// A muted call can leave the microphone and still play: a running

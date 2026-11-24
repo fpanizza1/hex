@@ -266,16 +266,53 @@ fn capture_sinks(default: &str, sinks: &[Sink]) -> Vec<String> {
     chosen
 }
 
+/// The sound server's default sink and every sink it lists, or `None` when
+/// `pactl` or its JSON cannot be read.
+#[cfg(target_os = "linux")]
+fn meeting_sink_listing() -> Option<(String, Vec<Sink>)> {
+    use crate::linux::input::route;
+
+    let default = route::pactl(&["get-default-sink"])?;
+    Some((default, listed_sinks()?))
+}
+
 /// The sinks a meeting's system track captures, default first, or `None` when
 /// the sound server cannot be read or lists nothing, which keeps the caller on
 /// its one untargeted capture of the default output.
 #[cfg(target_os = "linux")]
 pub(crate) fn meeting_sinks() -> Option<Vec<String>> {
-    use crate::linux::input::route;
+    let (default, sinks) = meeting_sink_listing()?;
+    let chosen = capture_sinks(&default, &sinks);
+    (!chosen.is_empty()).then_some(chosen)
+}
 
-    let default = route::pactl(&["get-default-sink"])?;
-    let sinks = capture_sinks(&default, &listed_sinks()?);
-    (!sinks.is_empty()).then_some(sinks)
+/// The outputs Labs › Choose meeting audio offers: every sink a meeting can
+/// capture, default first, each with the sound server's description. `None`
+/// when the sound server cannot be read.
+#[cfg(target_os = "linux")]
+pub(crate) fn meeting_output_devices() -> Option<Vec<(String, String)>> {
+    let (default, sinks) = meeting_sink_listing()?;
+    let chosen = capture_sinks(&default, &sinks);
+    Some(
+        chosen
+            .into_iter()
+            .map(|name| {
+                let display = sinks
+                    .iter()
+                    .find(|sink| sink.name == name)
+                    .and_then(|sink| {
+                        let property = |key: &str| {
+                            sink.properties.get(key).and_then(serde_json::Value::as_str)
+                        };
+                        property("device.description")
+                            .or_else(|| property("node.description"))
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| name.clone());
+                (name, display)
+            })
+            .collect(),
+    )
 }
 
 /// The route of the sound server's default sink now: `pactl` names it and

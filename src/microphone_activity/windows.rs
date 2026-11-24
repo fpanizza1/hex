@@ -133,6 +133,18 @@ pub(crate) fn process_canonical_bundle_id(pid: u32) -> Option<&'static str> {
     canonical_bundle_id_for(&executable, name.as_deref())
 }
 
+/// `pid`'s executable file name, lowercased (such as `ms-teams.exe`), and
+/// its file stem as a display name, for Labs › Choose meeting audio.
+pub(crate) fn process_application(pid: u32) -> Option<(String, String)> {
+    let path = process_path(pid)?;
+    let executable = path.file_name()?.to_string_lossy().to_ascii_lowercase();
+    let name = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| executable.clone());
+    Some((executable, name))
+}
+
 fn process_path(pid: u32) -> Option<std::path::PathBuf> {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{

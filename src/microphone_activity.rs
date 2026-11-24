@@ -46,7 +46,11 @@ pub use os::active_microphone_applications;
 #[cfg(not(target_os = "macos"))]
 pub(crate) use os::application_running_output;
 #[cfg(target_os = "windows")]
-pub(crate) use os::{EndpointSessions, active_endpoint_sessions, process_canonical_bundle_id};
+pub(crate) use os::{
+    EndpointSessions, active_endpoint_sessions, process_application, process_canonical_bundle_id,
+};
+#[cfg(target_os = "linux")]
+pub(crate) use os::{PlayingApplication, playing_applications};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActiveMicrophoneApplication {
@@ -188,6 +192,56 @@ pub(crate) fn application_running_output(canonical_bundle_id: &str) -> Result<bo
                 && property_cf_string(process_object, kAudioProcessPropertyBundleID)
                     .is_some_and(|bundle_id| is_process_of(&bundle_id, canonical_bundle_id))
         }))
+    })
+}
+
+#[cfg(target_os = "macos")]
+/// The applications playing output now, Hex excluded, for Labs › Choose
+/// meeting audio: each canonical bundle id (else its own) and a display
+/// name. A helper process is named as its app, once; only Core Audio's
+/// process metadata is read, never audio.
+pub(crate) fn playing_output_applications() -> Vec<(String, String)> {
+    objc2::rc::autoreleasepool(|_| {
+        let own_pid = std::process::id() as i32;
+        let Ok(process_objects) = property_vec::<AudioObjectID>(
+            kAudioObjectSystemObject as AudioObjectID,
+            kAudioHardwarePropertyProcessObjectList,
+        ) else {
+            return Vec::new();
+        };
+        let mut applications: Vec<(String, String)> = Vec::new();
+        for process_object in process_objects {
+            let playing =
+                property_value::<u32>(process_object, kAudioProcessPropertyIsRunningOutput)
+                    .is_ok_and(|running| running != 0);
+            if !playing {
+                continue;
+            }
+            let Ok(pid) = property_value::<i32>(process_object, kAudioProcessPropertyPID) else {
+                continue;
+            };
+            if pid == own_pid {
+                continue;
+            }
+            let info = running_application_info(pid);
+            let bundle_id = info
+                .as_ref()
+                .map(|(bundle_id, _)| bundle_id.clone())
+                .or_else(|| property_cf_string(process_object, kAudioProcessPropertyBundleID));
+            let Some(bundle_id) = bundle_id else {
+                continue;
+            };
+            let localized = info.and_then(|(_, name)| name);
+            let id = canonical_bundle_id_for(&bundle_id, localized.as_deref())
+                .unwrap_or(bundle_id.as_str())
+                .to_owned();
+            if applications.iter().any(|(known, _)| *known == id) {
+                continue;
+            }
+            applications.push((id, display_name(&bundle_id, localized)));
+        }
+        applications.sort_by_key(|(_, name)| name.to_lowercase());
+        applications
     })
 }
 

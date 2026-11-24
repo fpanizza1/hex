@@ -1,13 +1,15 @@
-//! The Linux side of meetings: system audio from every output's monitor, and
-//! the file manager and Trash.
+//! The Linux side of meetings: system audio, and the file manager and Trash.
 //!
 //! One `pw-record` per output captures that output's monitor
 //! (`stream.capture.sink`), and the source mixes them, so a call that plays on
 //! a headset or dock instead of the default output is still heard (#1801).
-//! Each runs as a child process so Hex links no PipeWire library and a desktop
-//! without PipeWire fails only this source. A capture that ends while its sink
-//! is still listed starts again, so a Bluetooth card switching from A2DP to
-//! HFP does not silence that output for the rest of the meeting.
+//! With Labs › Choose meeting audio on, the source instead opens one capture
+//! for the chosen output, or one per running output stream of the chosen app,
+//! and records silence while that source isn't present. Each runs as a child
+//! process so Hex links no PipeWire library and a desktop without PipeWire
+//! fails only this source. A capture that ends while its target is still
+//! listed starts again, so a Bluetooth card switching from A2DP to HFP does
+//! not silence that output for the rest of the meeting.
 
 use std::collections::BTreeSet;
 use std::io::Read;
@@ -21,10 +23,12 @@ use std::time::{Duration, Instant, SystemTime};
 use color_eyre::eyre::{Result, WrapErr, eyre};
 
 use super::SAMPLE_RATE;
+use super::audio_source::SourceChoice;
 use super::capture::{
     LiveSource, MIX_HOLD, POLL_INTERVAL, PacketSink, RETRY_INITIAL, RETRY_MAX, STALL_TIMEOUT, mix,
     retry_delay,
 };
+use crate::microphone_activity::PlayingApplication;
 
 const PW_RECORD: &str = "pw-record";
 /// 100 ms of 16 kHz mono `f32`.
@@ -33,10 +37,13 @@ const READ_BYTES: usize = SAMPLE_RATE as usize / 10 * 4;
 /// total however many outputs it hears.
 const QUEUE_PER_CAPTURE: usize = 128;
 const QUEUE_CAPACITY: usize = 1_024;
-/// How often the source re-reads the outputs it captures: a changed list
-/// reopens it, and a capture that ended starts again while its sink is still
+/// How often the source re-reads what it captures: a changed list reopens
+/// it, and a capture that ended starts again while its target is still
 /// listed.
 const ROUTE_CHECK: Duration = Duration::from_secs(2);
+/// 100 ms of 16 kHz silence, recorded while a chosen source isn't present so
+/// the system track keeps its place on the meeting's timeline.
+const SILENT_PACKET: usize = SAMPLE_RATE as usize / 10;
 /// The PipeWire node every system audio monitor presents.
 const NODE_NAME: &str = "hex-meeting-system-audio";
 const NODE_DESCRIPTION: &str = "Hex meeting system audio";
@@ -77,17 +84,101 @@ pub(super) fn open_system_audio(
     _sink: &PacketSink,
     _application: Option<&str>,
 ) -> Result<Box<dyn LiveSource>> {
-    MonitorSource::start().map(|source| Box::new(source) as Box<dyn LiveSource>)
+    // Read as each stream opens, so turning the lab off, or choosing another
+    // source, applies to the next stream the supervisor opens.
+    let choice = SourceChoice::effective();
+    MonitorSource::start(choice).map(|source| Box::new(source) as Box<dyn LiveSource>)
+}
+
+/// One thing the system track records: an output's monitor, or one running
+/// output stream of a chosen application.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum Target {
+    /// An output, named as the sound server names it.
+    Sink(String),
+    /// One running output stream node, named as PipeWire names it for
+    /// `target.object`.
+    Node(String),
+}
+
+impl Target {
+    /// The target's name, for a property string or a log line.
+    fn label(&self) -> &str {
+        match self {
+            Self::Sink(name) | Self::Node(name) => name,
+        }
+    }
+}
+
+/// The targets a choice records, given the sinks and apps listed now. All
+/// records every sink, an output only while it is listed, and an app only
+/// its running output streams: a chosen source that isn't present records
+/// nothing until it returns.
+fn plan_targets(
+    choice: &SourceChoice,
+    sinks: &[String],
+    apps: &[PlayingApplication],
+) -> Vec<Target> {
+    match choice {
+        SourceChoice::All => sinks.iter().cloned().map(Target::Sink).collect(),
+        SourceChoice::Output { id, .. } => {
+            if sinks.iter().any(|sink| sink == id) {
+                vec![Target::Sink(id.clone())]
+            } else {
+                Vec::new()
+            }
+        }
+        SourceChoice::App { id, .. } => apps
+            .iter()
+            .find(|app| app.id == *id)
+            .map(|app| app.targets.iter().cloned().map(Target::Node).collect())
+            .unwrap_or_default(),
+    }
+}
+
+/// Whether the plan changed since the source opened: compared as a set, so
+/// the default moving first is not a change, and a stream node replaced by
+/// another of the same app is.
+fn targets_changed(open: &[Target], listed: &[Target]) -> bool {
+    let open = open.iter().collect::<BTreeSet<_>>();
+    let listed = listed.iter().collect::<BTreeSet<_>>();
+    open != listed
+}
+
+/// The apps a choice needs to plan its targets; only an app choice reads the
+/// PipeWire graph.
+fn listed_apps(choice: &SourceChoice) -> Vec<PlayingApplication> {
+    match choice {
+        SourceChoice::App { .. } => crate::microphone_activity::playing_applications(),
+        _ => Vec::new(),
+    }
+}
+
+/// The targets to record now, or `None` when the sinks cannot be read and
+/// the choice needs them (an unreadable sound server never reopens).
+fn listed_targets(choice: &SourceChoice) -> Option<Vec<Target>> {
+    let sinks = capturable_sinks();
+    if sinks.is_none() && !matches!(choice, SourceChoice::App { .. }) {
+        return None;
+    }
+    let apps = listed_apps(choice);
+    Some(plan_targets(
+        choice,
+        sinks.as_deref().unwrap_or_default(),
+        &apps,
+    ))
 }
 
 /// Every captured output's `pw-record`, mixed into one 16 kHz mono `f32`
 /// system track.
 struct MonitorSource {
-    /// One capture per output, in capture order.
+    /// One capture per target, in capture order.
     outputs: Vec<Output>,
-    /// The sinks asked for, empty when one untargeted `pw-record` follows the
-    /// default output. A changed list reopens the source.
-    sinks: Vec<String>,
+    /// What it records, read from the lab as it opened.
+    choice: SourceChoice,
+    /// The plan it opened with, empty when one untargeted `pw-record` follows
+    /// the default output. A changed plan reopens the source.
+    targets: Vec<Target>,
     /// The program every capture starts, kept to start one again.
     executable: PathBuf,
     /// The capture events' sender, kept so a restarted capture can send.
@@ -102,8 +193,8 @@ struct MonitorSource {
 /// One captured output: its `pw-record`, what it hears, and its audio not yet
 /// mixed.
 struct Output {
-    /// The sink it captures, or `None` when it follows the default output.
-    sink: Option<String>,
+    /// The target it captures, or `None` when it follows the default output.
+    target: Option<Target>,
     /// `None` once this capture ended; the others keep the track going.
     child: Option<Child>,
     /// When a capture that ended starts again.
@@ -191,76 +282,61 @@ fn capturable_sinks() -> Option<Vec<String>> {
     )
 }
 
-/// Whether the sinks captured are still the ones listed, compared as a set so
-/// the default moving between them is not a change.
-fn sinks_changed(open: &[String], listed: &[String]) -> bool {
-    let open = open.iter().collect::<BTreeSet<_>>();
-    let listed = listed.iter().collect::<BTreeSet<_>>();
-    open != listed
-}
-
-/// Whether the source should reopen: its captures moved with the listed sinks,
-/// or it is still on the untargeted fallback and sinks can now be listed.
-/// `None` is a sound server Hex could not read, which never reopens.
-fn route_needs_reopen(open: &[String], listed: Option<&[String]>) -> bool {
-    match listed {
-        None => false,
-        Some(listed) if open.is_empty() => !listed.is_empty(),
-        Some(listed) => sinks_changed(open, listed),
-    }
-}
-
-/// The outputs to start again: a capture that ended and is due, whose sink is
-/// still listed. A listing Hex could not read (`None`) keeps every such
-/// output; the fallback output never restarts here, since the source reopens
-/// for it instead.
-fn restart_due(outputs: &[Output], listed: Option<&[String]>, now: Instant) -> Vec<usize> {
+/// The outputs to start again: a capture that ended and is due, whose target
+/// is still in the listed plan. A listing Hex could not read (`None`) keeps
+/// every such output; the untargeted fallback never restarts here, since the
+/// source reopens for it instead.
+fn restart_due(outputs: &[Output], listed: Option<&[Target]>, now: Instant) -> Vec<usize> {
     outputs
         .iter()
         .enumerate()
         .filter(|(_, output)| {
             output.child.is_none()
                 && output.restart.is_due(now)
-                && output.sink.as_deref().is_some_and(|sink| {
-                    listed.is_none_or(|listed| listed.iter().any(|name| name == sink))
-                })
+                && output
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| listed.is_none_or(|listed| listed.contains(target)))
         })
         .map(|(index, _)| index)
         .collect()
 }
 
 impl MonitorSource {
-    fn start() -> Result<Self> {
+    fn start(choice: SourceChoice) -> Result<Self> {
         let executable =
             find_executable(PW_RECORD).ok_or_else(|| eyre!("{PW_RECORD} is not installed"))?;
-        let sinks = capturable_sinks().unwrap_or_else(|| {
+        let targets = listed_targets(&choice).unwrap_or_else(|| {
             tracing::debug!(
                 "could not read the sound server's sinks; following the default output"
             );
             Vec::new()
         });
-        // One capture per output, or one that follows the default output when
-        // the sound server cannot be read.
-        let targets = if sinks.is_empty() {
+        let silent = !choice.is_all() && targets.is_empty();
+        // One capture per target, or one that follows the default output when
+        // all computer audio is chosen and the sound server cannot be read.
+        let captures: Vec<Option<Target>> = if choice.is_all() && targets.is_empty() {
             vec![None]
         } else {
-            sinks.iter().map(String::as_str).map(Some).collect()
+            targets.iter().cloned().map(Some).collect()
         };
-        let queue = (QUEUE_PER_CAPTURE * targets.len()).min(QUEUE_CAPACITY);
+        let queue = (QUEUE_PER_CAPTURE * captures.len().max(1)).min(QUEUE_CAPACITY);
         let (sender, buffers) = mpsc::sync_channel(queue);
-        let mut outputs = Vec::with_capacity(targets.len());
+        let mut outputs = Vec::with_capacity(captures.len());
         let mut first_error = None;
-        for target in targets {
-            match spawn_monitor(&executable, target, outputs.len(), sender.clone()) {
+        for target in captures {
+            match spawn_monitor(&executable, target.as_ref(), outputs.len(), sender.clone()) {
                 Ok(child) => outputs.push(Output {
-                    sink: target.map(str::to_owned),
+                    target,
                     child: Some(child),
                     restart: Restart::running(Instant::now()),
                     pending: Vec::new(),
                 }),
                 Err(error) => {
                     tracing::warn!(
-                        sink = target.unwrap_or("the default output"),
+                        target = target
+                            .as_ref()
+                            .map_or("the default output", Target::label),
                         error = %format!("{error:#}"),
                         "could not hear an audio output"
                     );
@@ -268,19 +344,25 @@ impl MonitorSource {
                 }
             }
         }
-        if outputs.is_empty() {
+        if outputs.is_empty() && !silent {
             return Err(
                 first_error.unwrap_or_else(|| eyre!("no audio output is available to capture"))
             );
         }
-        if sinks.is_empty() {
+        if silent {
+            tracing::info!(
+                ?choice,
+                "the chosen meeting audio source isn't playing; recording silence until it returns"
+            );
+        } else if choice.is_all() && targets.is_empty() {
             tracing::info!("system audio monitor follows the default output");
         } else {
-            tracing::info!(sinks = ?sinks, "system audio monitors started");
+            tracing::info!(?choice, ?targets, "system audio monitors started");
         }
         Ok(Self {
             outputs,
-            sinks,
+            choice,
+            targets,
             executable,
             sender,
             buffers,
@@ -288,6 +370,12 @@ impl MonitorSource {
             route_checked: Instant::now(),
             last_exit: None,
         })
+    }
+
+    /// Whether the chosen source isn't present, so the track records silence
+    /// until it appears.
+    fn silent(&self) -> bool {
+        !self.choice.is_all() && self.outputs.is_empty()
     }
 
     /// Applies one event from a capture.
@@ -319,26 +407,29 @@ impl MonitorSource {
             let _ = child.wait();
             output.pending.clear();
             output.restart.exited(now);
-            let sink = output.sink.as_deref().unwrap_or("the default output");
+            let target = output
+                .target
+                .as_ref()
+                .map_or("the default output", Target::label);
             match status {
-                Some(status) => format!("{sink}: pw-record exited ({status})"),
-                None => format!("{sink}: pw-record closed its output"),
+                Some(status) => format!("{target}: pw-record exited ({status})"),
+                None => format!("{target}: pw-record closed its output"),
             }
         };
         tracing::warn!(%reason, "system audio monitor stopped");
         self.last_exit = Some(reason);
     }
 
-    /// Starts again every capture whose sink is still listed, at its own index
-    /// so its audio keeps its place in the mix. A failed start waits for the
-    /// next due time, still bounded by [`RETRY_MAX`].
-    fn restart_exited(&mut self, listed: Option<&[String]>) {
+    /// Starts again every capture whose target is still listed, at its own
+    /// index so its audio keeps its place in the mix. A failed start waits for
+    /// the next due time, still bounded by [`RETRY_MAX`].
+    fn restart_exited(&mut self, listed: Option<&[Target]>) {
         let now = Instant::now();
         for index in restart_due(&self.outputs, listed, now) {
-            let target = self.outputs[index].sink.clone();
+            let target = self.outputs[index].target.clone();
             let spawned = spawn_monitor(
                 &self.executable,
-                target.as_deref(),
+                target.as_ref(),
                 index,
                 self.sender.clone(),
             );
@@ -348,14 +439,14 @@ impl MonitorSource {
                     output.child = Some(child);
                     output.restart.started(now);
                     tracing::info!(
-                        sink = target.as_deref().unwrap_or("the default output"),
+                        target = target.as_ref().map_or("the default output", Target::label),
                         "system audio monitor restarted"
                     );
                 }
                 Err(error) => {
                     output.restart.exited(now);
                     tracing::warn!(
-                        sink = target.as_deref().unwrap_or("the default output"),
+                        target = target.as_ref().map_or("the default output", Target::label),
                         error = %format!("{error:#}"),
                         "could not restart a system audio monitor; trying again"
                     );
@@ -372,25 +463,27 @@ impl MonitorSource {
     }
 }
 
-/// The stream properties that capture `target`'s monitor as capture `index`,
-/// or the default output's when `target` is `None`.
-fn properties(target: Option<&str>, index: usize) -> String {
+/// The stream properties that capture `target`'s monitor or stream node as
+/// capture `index`, or the default output's monitor when `target` is `None`.
+fn properties(target: Option<&Target>, index: usize) -> String {
     let node = match target {
-        // One node per output, so the graph lists each capture separately.
+        // One node per target, so the graph lists each capture separately.
         Some(_) => format!("{NODE_NAME}-{index}"),
         None => NODE_NAME.to_owned(),
     };
-    let mut properties = format!(
-        "{{ stream.capture.sink = true node.name = {node} \
-         node.description = \"{NODE_DESCRIPTION}\""
-    );
-    if target.is_some() {
+    // A monitor asks for the sink's monitor ports; a chosen app's running
+    // output stream is captured as the node itself.
+    let capture_sink = match target {
+        Some(Target::Node(_)) => "",
+        Some(Target::Sink(_)) | None => " stream.capture.sink = true",
+    };
+    let mut properties =
+        format!("{{{capture_sink} node.name = {node} node.description = \"{NODE_DESCRIPTION}\"");
+    if let Some(target) = target {
         // A target that will not link must not be moved to the default
         // output: that would mix the default monitor's audio in a second time.
         properties.push_str(" node.dont-fallback = true node.dont-reconnect = true");
-    }
-    if let Some(target) = target {
-        properties.push_str(&format!(" target.object = \"{target}\""));
+        properties.push_str(&format!(" target.object = \"{}\"", target.label()));
     }
     properties.push_str(" }");
     properties
@@ -401,7 +494,7 @@ fn properties(target: Option<&str>, index: usize) -> String {
 /// reads its audio as `index`.
 fn spawn_monitor(
     executable: &Path,
-    target: Option<&str>,
+    target: Option<&Target>,
     index: usize,
     sender: SyncSender<MonitorEvent>,
 ) -> Result<Child> {
@@ -475,11 +568,15 @@ impl LiveSource for MonitorSource {
     fn poll(&mut self, sink: &PacketSink) -> std::result::Result<(), String> {
         if self.route_checked.elapsed() >= ROUTE_CHECK {
             self.route_checked = Instant::now();
-            let listed = capturable_sinks();
-            if route_needs_reopen(&self.sinks, listed.as_deref()) {
-                return Err("the audio outputs changed".into());
+            match listed_targets(&self.choice) {
+                Some(listed) => {
+                    if targets_changed(&self.targets, &listed) {
+                        return Err("the audio outputs changed".into());
+                    }
+                    self.restart_exited(Some(&listed));
+                }
+                None => self.restart_exited(None),
             }
-            self.restart_exited(listed.as_deref());
         }
         match self.buffers.recv_timeout(POLL_INTERVAL) {
             Ok(first) => {
@@ -496,6 +593,12 @@ impl LiveSource for MonitorSource {
                     .map(|output| &mut output.pending)
                     .collect::<Vec<_>>();
                 sink.send(SAMPLE_RATE, mix(&mut pending, MIX_HOLD), None);
+                Ok(())
+            }
+            // The chosen source isn't present: record silence so the track
+            // keeps its place, and keep checking for it every 2 s.
+            Err(mpsc::RecvTimeoutError::Timeout) if self.silent() => {
+                sink.send(SAMPLE_RATE, vec![0.0; SILENT_PACKET], None);
                 Ok(())
             }
             Err(mpsc::RecvTimeoutError::Timeout) if self.last_audio.elapsed() > STALL_TIMEOUT => {
@@ -631,12 +734,23 @@ mod tests {
         );
         // A targeted capture names its own node, never falls back to the
         // default output, and folds those flags into the property string.
+        let sink = Target::Sink("bluez_output.AA_BB_CC_DD_EE_FF.1".into());
         assert_eq!(
-            properties(Some("bluez_output.AA_BB_CC_DD_EE_FF.1"), 2),
+            properties(Some(&sink), 2),
             "{ stream.capture.sink = true node.name = hex-meeting-system-audio-2 \
              node.description = \"Hex meeting system audio\" \
              node.dont-fallback = true node.dont-reconnect = true \
              target.object = \"bluez_output.AA_BB_CC_DD_EE_FF.1\" }"
+        );
+        // A chosen app's running output stream is the node itself, not a
+        // sink's monitor, and keeps the same no-fallback guarantees.
+        let node = Target::Node("118".into());
+        assert_eq!(
+            properties(Some(&node), 3),
+            "{ node.name = hex-meeting-system-audio-3 \
+             node.description = \"Hex meeting system audio\" \
+             node.dont-fallback = true node.dont-reconnect = true \
+             target.object = \"118\" }"
         );
     }
 
@@ -666,70 +780,129 @@ mod tests {
     fn a_reordered_sink_list_is_not_a_change() {
         // The default moving first is the same set of outputs; a sink added or
         // gone is a change the source reopens for.
-        let open = ["speakers".to_owned(), "headset".to_owned()];
-        assert!(!sinks_changed(
-            &open,
-            &["headset".to_owned(), "speakers".to_owned()]
+        let targets = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| Target::Sink((*name).into()))
+                .collect::<Vec<_>>()
+        };
+        assert!(!targets_changed(
+            &targets(&["speakers", "headset"]),
+            &targets(&["headset", "speakers"]),
         ));
-        assert!(sinks_changed(&open, &["speakers".to_owned()]));
-        assert!(sinks_changed(
-            &open,
-            &[
-                "speakers".to_owned(),
-                "headset".to_owned(),
-                "dock".to_owned()
-            ]
+        assert!(targets_changed(
+            &targets(&["speakers", "headset"]),
+            &targets(&["speakers"]),
         ));
+        assert!(targets_changed(
+            &targets(&["speakers", "headset"]),
+            &targets(&["speakers", "headset", "dock"]),
+        ));
+        assert!(!targets_changed(&[], &[]), "the fallback stays put");
+        assert!(targets_changed(&[], &targets(&["speakers"])));
     }
 
+    fn app(id: &str, name: &str, targets: &[&str]) -> PlayingApplication {
+        PlayingApplication {
+            id: id.into(),
+            name: name.into(),
+            targets: targets.iter().map(|target| (*target).into()).collect(),
+        }
+    }
+
+    /// The chosen source decides exactly what records: one output's monitor,
+    /// one app's running streams, or (for all) every listed sink. A source
+    /// that isn't present records nothing rather than falling back to every
+    /// output.
     #[test]
-    fn a_fallback_capture_reopens_once_the_sinks_can_be_read() {
-        // The untargeted capture follows the default output; it moves to one
-        // capture per output only when a non-empty list can be targeted.
-        assert!(!route_needs_reopen(&[], None));
-        assert!(!route_needs_reopen(&[], Some(&[])));
-        assert!(route_needs_reopen(&[], Some(&["speakers".to_owned()])));
-        // Opened captures survive a failed read or the same list, and reopen
-        // when nothing listed can be targeted any more.
-        let open = ["speakers".to_owned()];
-        assert!(!route_needs_reopen(&open, None));
-        assert!(!route_needs_reopen(&open, Some(&["speakers".to_owned()])));
-        assert!(route_needs_reopen(&open, Some(&[])));
+    fn a_choice_records_only_its_own_source() {
+        let sinks = ["speakers".to_owned(), "headset".to_owned()];
+        let apps = [
+            app("spotify", "Spotify", &["41"]),
+            app("chrome", "Google Chrome", &["42", "43"]),
+        ];
+        let all = plan_targets(&SourceChoice::All, &sinks, &apps);
+        assert_eq!(
+            all,
+            [
+                Target::Sink("speakers".into()),
+                Target::Sink("headset".into())
+            ]
+        );
+        // An output records only while it is listed; gone, it records
+        // nothing and the source keeps looking.
+        let headset = SourceChoice::Output {
+            id: "headset".into(),
+            name: "Headset".into(),
+        };
+        assert_eq!(
+            plan_targets(&headset, &sinks, &apps),
+            [Target::Sink("headset".into())]
+        );
+        let dock = SourceChoice::Output {
+            id: "dock".into(),
+            name: "Dock".into(),
+        };
+        assert!(plan_targets(&dock, &sinks, &apps).is_empty());
+        // An app records every running output stream it has, and nothing
+        // once it stops playing.
+        let chrome = SourceChoice::App {
+            id: "chrome".into(),
+            name: "Google Chrome".into(),
+        };
+        assert_eq!(
+            plan_targets(&chrome, &sinks, &apps),
+            [Target::Node("42".into()), Target::Node("43".into())]
+        );
+        let slack = SourceChoice::App {
+            id: "slack".into(),
+            name: "Slack".into(),
+        };
+        assert!(plan_targets(&slack, &sinks, &apps).is_empty());
     }
 
     #[test]
     fn an_exited_monitor_is_restarted_while_its_sink_keeps_its_name() {
         let now = Instant::now();
         let due = now + RETRY_INITIAL;
-        let sinks = ["speakers".to_owned(), "headset".to_owned()];
         // A Bluetooth card changing profile ends that sink's pw-record while
         // the sink comes back under the same name, so the set is unchanged and
         // the source stays open; only that capture starts again.
-        assert!(!route_needs_reopen(&sinks, Some(&sinks)));
+        let targets = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| Target::Sink((*name).into()))
+                .collect::<Vec<_>>()
+        };
+        assert!(!targets_changed(
+            &targets(&["speakers", "headset"]),
+            &targets(&["speakers", "headset"]),
+        ));
         let exited = |at| {
             let mut restart = Restart::running(now);
             restart.exited(at);
             restart
         };
-        let output = |sink: Option<&str>, restart| Output {
-            sink: sink.map(str::to_owned),
+        let output = |target: Option<Target>, restart| Output {
+            target,
             child: None,
             restart,
             pending: Vec::new(),
         };
+        let sink = |name: &str| Some(Target::Sink(name.into()));
         let outputs = [
             // Ended, due, and still listed: the one that starts again.
-            output(Some("speakers"), exited(now)),
+            output(sink("speakers"), exited(now)),
             // Ended and due, but gone from the listed sinks.
-            output(Some("headset"), exited(now)),
+            output(sink("headset"), exited(now)),
             // Ended, but not due yet.
-            output(Some("dock"), exited(due)),
+            output(sink("dock"), exited(due)),
             // The fallback output never restarts here.
             output(None, exited(now)),
             // Still running.
-            output(Some("speakers"), Restart::running(now)),
+            output(sink("speakers"), Restart::running(now)),
         ];
-        let listed = ["speakers".to_owned(), "dock".to_owned()];
+        let listed = targets(&["speakers", "dock"]);
         assert_eq!(restart_due(&outputs, Some(&listed), due), [0]);
         // A listing Hex could not read keeps every output that is due by now;
         // the fallback still never restarts.

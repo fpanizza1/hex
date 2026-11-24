@@ -39,6 +39,7 @@ mod list_detail;
 mod lists;
 mod live_notes;
 pub(crate) mod live_text;
+mod meeting_audio;
 pub(crate) mod meeting_capsules;
 mod meetings;
 pub(crate) use self::meetings::meeting_import_failed;
@@ -709,6 +710,8 @@ pub(crate) struct Ui {
     sound_sets: sound_sets::SoundSets,
     /// Meetings › Settings' Calls sheet and the calls Hex has seen.
     calls: calls::Calls,
+    /// Meetings › Computer audio's app and output lists (Labs).
+    meeting_audio: meeting_audio::Listing,
     #[cfg(hex_capture)]
     routing: scrawl::routing_rules::Routing,
     tour: Option<onboarding::Tour>,
@@ -843,6 +846,7 @@ impl Ui {
             explainer: explainer::Explainer::default(),
             sound_sets: sound_sets::SoundSets::default(),
             calls: calls::Calls::default(),
+            meeting_audio: meeting_audio::Listing::default(),
             #[cfg(hex_capture)]
             routing: scrawl::routing_rules::Routing::default(),
             tour: None,
@@ -1403,6 +1407,7 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     changed |= modes::poll_chooser(ui);
     changed |= model_import::poll(ui);
     changed |= meetings::poll_import(ui);
+    changed |= meeting_audio::poll(ui, clock);
     changed |= vocabulary::poll(ui);
     // Labs › Screenshots' folder chooser, on macOS.
     #[cfg(all(target_os = "macos", hex_capture))]
