@@ -185,17 +185,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('language', nargs='?', default='all', choices=['all'] + languages)
     parser.add_argument('--output', type=Path, default=ANDROID/'build/typing-quality.json')
+    parser.add_argument('--partner', help='a second typing language on the same keys (Labs), such as es')
     args = parser.parse_args()
     start = time.monotonic()
     results = []
     with tempfile.TemporaryDirectory() as scratch:
         tmp = Path(scratch)
         cp = tmp / 'classpath'
-        subprocess.run([ANDROID/'gradlew', '-q', '-I', HERE/'gate-classpath.gradle', ':app:typingGateClasspath',
+        gradlew = ANDROID/('gradlew.bat' if os.name == 'nt' else 'gradlew')
+        subprocess.run([gradlew, '-q', '-I', HERE/'gate-classpath.gradle', ':app:typingGateClasspath',
                         '-x', 'prepareSpeechModel', '-PgateClasspath='+str(cp)], cwd=ANDROID, check=True)
         jdk = Path(os.environ['JAVA_HOME']) / 'bin' if 'JAVA_HOME' in os.environ else Path('')
         subprocess.run([jdk/'javac', '-encoding', 'UTF-8', '-cp', cp.read_text(), '-d', tmp, HERE/'Replay.java', HERE/'GateLexicon.java'], check=True)
-        command = [jdk/'java', '-Xmx768m', '-Dfile.encoding=UTF-8', '-cp', str(tmp)+os.pathsep+cp.read_text()]
+        command = [jdk/'java', '-Xmx768m', '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8'] + (['-Dhex.partner='+args.partner] if args.partner else []) +             ['-cp', str(tmp)+os.pathsep+cp.read_text()]
         print('Lang   Noisy WER  Reduction   Changed  Unambig.  Ambig.  Harm   Critical  Gate', flush=True)
         for lang in languages if args.language == 'all' else [args.language]:
             r = score(lang, maps[lang], cases[lang], limits, tmp, command)

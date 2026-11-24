@@ -56,10 +56,11 @@ private enum class Page(val title: Int) {
     Labs(R.string.settings_labs),
     Language(R.string.settings_dictation_language), Layout(R.string.settings_keyboard_layout), Styles(R.string.settings_style),
     Policy(R.string.settings_privacy_policy), Licences(R.string.settings_licences), Licence(R.string.settings_licences),
-    Feedback(R.string.feedback_send_feedback);
+    Feedback(R.string.feedback_send_feedback), SecondLanguage(R.string.second_language);
     val parent get() = when (this) {
         Language, Styles -> Dictation
         Layout -> Keyboard
+        SecondLanguage -> Labs
         Policy, Licences -> Privacy
         Licence -> Licences
         else -> Home
@@ -129,6 +130,7 @@ internal fun HexSettings(setup: Setup, speech: SpeechPreferences, typing: Typing
     val numberRow = remember(revision) { typing.numberRow }
     val localCurrency = remember(revision) { typing.localCurrency }
     val keyHeight = remember(revision) { typing.keyHeight }
+    val secondLanguage = remember(revision) { typing.secondLanguage }
     var keyHeightDraft by remember(keyHeight) { mutableFloatStateOf(keyHeight.toFloat()) }
     val parakeet = remember(revision) { speech.parakeet }
     val parakeetModel = ModelStore.parakeet.state.collectAsState().value
@@ -382,6 +384,9 @@ internal fun HexSettings(setup: Setup, speech: SpeechPreferences, typing: Typing
                                         modifier = Modifier.semantics { contentDescription = context.getString(R.string.keyboard_height) })
                                 }
                                 Rule()
+                                Entry(stringResource(R.string.second_language), stringResource(R.string.second_language_detail),
+                                    secondLanguage?.label ?: stringResource(R.string.second_language_off), { open(Page.SecondLanguage) })
+                                Rule()
                                 Toggle(stringResource(R.string.letter_symbols), stringResource(R.string.letter_symbols_detail),
                                     letterSymbols) { typing.letterSymbols = it }
                                 Rule()
@@ -403,6 +408,13 @@ internal fun HexSettings(setup: Setup, speech: SpeechPreferences, typing: Typing
                                 Toggle(stringResource(R.string.voice_only_mode), stringResource(R.string.voice_only_detail),
                                     voiceOnly) { typing.voiceOnly = it; VoiceOnly.setEnabledFromSettings(context, it) }
                             }
+                        }
+                    }
+                    Page.SecondLanguage -> Card {
+                        (listOf(null) + Spoken.entries).forEachIndexed { i, language ->
+                            if (i != 0) Rule()
+                            Entry(language?.label ?: stringResource(R.string.second_language_off), null,
+                                if (language == secondLanguage) "✓" else "", { typing.secondLanguage = language; open(page.parent) })
                         }
                     }
                     Page.Styles -> Card {

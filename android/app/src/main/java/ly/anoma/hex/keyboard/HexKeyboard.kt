@@ -93,6 +93,7 @@ class HexKeyboard : InputMethodService() {
         if (key == TypingPreferences.KEYBOARD_TOOLS) { engine.keyboardToolsChanged(); watchClipboard() }
         if (key == TypingPreferences.VOICE_ONLY) modeChanged()
         if (key == TypingPreferences.KEY_HEIGHT) heightChanged()
+        if (key == TypingPreferences.SECOND_LANGUAGE) engine.configureTyping()
     }
     /** Labs › Keyboard › Keyboard height changed: the keys are drawn again at once when shown and idle, else
      * when next shown, so a dictation in progress keeps its view. */

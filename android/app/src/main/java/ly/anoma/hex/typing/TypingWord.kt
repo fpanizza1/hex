@@ -64,11 +64,21 @@ internal class TypingWord(val decoder: SpatialDecoder, val spatial: Boolean) {
     var suggestSwearWords = false
         set(value) {
             if (value != field) { field = value; decision = null }
+            partner?.suggestSwearWords = value
         }
     /** Settings › Keyboard › Auto-capitalisation (iOS AutocorrectEngine.addsCapitals). Off, nothing adds a
      * capital you didn't type: "i" stays "i", "monday" "monday", German nouns as typed, the strip and its
      * predictions lowercase; your own words and shortcuts keep theirs. */
     var addsCapitals = true
+        set(value) { field = value; partner?.addsCapitals = value }
+    /** Labs › Keyboard › Second typing language (iPhone Hex's bilingual autocorrect): the other language's word,
+     * fed the same taps on these keys, so a word of either is never "corrected" into the other, typos are fixed
+     * in either, and the strip offers the language the sentence is in. Null with one language. */
+    var partner: TypingWord? = null
+    /** The language whose fix [replacement] last gave (the partner's or this one's), so turning it down is
+     * remembered for that language; null when it gave none. */
+    var fixLanguage: String? = null
+        private set
     /** English's word list standing in for a dictation language with no layout or typing model of its own
      * (Português, Nederlands, Polski, Русский): the keys' geometry and your personal dictionary still work,
      * but the model's completions, next words, autocorrection, tap correction and emoji keywords are English's
@@ -77,6 +87,7 @@ internal class TypingWord(val decoder: SpatialDecoder, val spatial: Boolean) {
     /** Starts a word after `before`. The word a space just finished stays revisable only when
      * `before` is still the text it left; an empty `before` keeps it for the next call. */
     fun reset(before: String = "") {
+        partner?.reset(before)
         token = ""; taps.clear(); decision = null; literalOnly = false
         this.before = before
         previousText = previousWord(before).takeIf { it.isNotEmpty() }
@@ -96,6 +107,8 @@ internal class TypingWord(val decoder: SpatialDecoder, val spatial: Boolean) {
      * as shift would be, by default at a sentence's start. */
     fun predictions(before: String, capitalize: Boolean? = null): List<String> {
         if (standIn) return emptyList()
+        // Next words in the language the sentence is in.
+        workingPartner()?.let { p -> if (lean(p, before) > 0) return p.predictions(before, capitalize) }
         val text = if (before.lastOrNull()?.let { it.isLetter() || it == '\'' || it == '\u2019' } == true) "$before " else before
         val words = when {
             startsSentence(text) -> sentenceStarters[model.language]
@@ -137,14 +150,39 @@ internal class TypingWord(val decoder: SpatialDecoder, val spatial: Boolean) {
      * frequency (after two letters the word is usually unfinished: completions first). Never what was
      * typed again. [autocorrect] off: no fix and no readings, completions only. */
     fun strip(autocorrect: Boolean = true): List<Suggestion> {
+        val fix = if (autocorrect && !standIn && token.length in 1..MAX_LENGTH) replacement() else null
+        val p = workingPartner() ?: return strip(autocorrect, fix)
+        // A sentence in one language gets only that language's words (iPhone Hex, TestFlight 56: "autocomplete
+        // suggests English words in Czech too"); without one, both, in turn, after what space puts in.
+        val lean = lean(p, before)
+        val mine = strip(autocorrect, fix)
+        // Your shortcut's phrase stands alone.
+        if (lean < 0 || mine.firstOrNull()?.let { it.kind == Suggestion.Kind.Fix && it.text != fix } == true) return mine
+        val theirs = p.strip(autocorrect, fix)
+        if (lean > 0) return if (theirs.none { it.kind == Suggestion.Kind.Typed } && knowsAsTyped(token))
+            (listOf(Suggestion(token, Suggestion.Kind.Typed)) + theirs).take(Suggestion.SLOTS) else theirs
+        val all = mine + theirs
+        val typed = all.firstOrNull { it.kind == Suggestion.Kind.Typed }
+        val first = all.firstOrNull { it.kind == Suggestion.Kind.Fix }
+        val a = mine.filter { it.kind == Suggestion.Kind.Word }
+        val b = theirs.filter { it.kind == Suggestion.Kind.Word }
+        val words = ArrayList<Suggestion>()
+        for (i in 0 until maxOf(a.size, b.size)) for (list in listOf(a, b)) list.getOrNull(i)?.let { s ->
+            if (words.none { it.text.equals(s.text, ignoreCase = true) } && first?.text?.equals(s.text, ignoreCase = true) != true) words.add(s)
+        }
+        return (listOfNotNull(typed, first) + words).take(Suggestion.SLOTS).ifEmpty { mine }
+    }
+
+    /** [strip] in this language alone, with [fix] as what space puts in. */
+    private fun strip(autocorrect: Boolean, fix: String?): List<Suggestion> {
         if (token.length !in 1..MAX_LENGTH) return emptyList()
         val typed = Suggestion(token, Suggestion.Kind.Typed)
         // Your shortcut: what you typed and its phrase, which space puts in whatever autocorrect does.
         decoder.personal?.shortcut(lookup(token))?.let { return listOf(typed, Suggestion(it, Suggestion.Kind.Fix)) }
-        val fix = if (autocorrect && !standIn) replacement() else null
         val pool = ArrayList<String>(4)
         val lower = lookup(token.lowercase())
-        val showTyped = standIn || fix != null || blocked(token) || knows(lower)
+        val showTyped = standIn || fix != null || blocked(token) || knows(lower) ||
+            workingPartner()?.knowsAsTyped(token) == true
         val size = if (showTyped) 2 else 3
         val lowered = !addsCapitals && token.none { it.isUpperCase() }
         fun add(word: String) {
@@ -176,13 +214,16 @@ internal class TypingWord(val decoder: SpatialDecoder, val spatial: Boolean) {
     // A candidate cased as the word was typed, with the capital the strip shows for names.
     private fun shown(word: String) = matchCase(token, if (token.firstOrNull()?.isUpperCase() == true) word else displayed(word))
     fun letter(text: String, x: Double, y: Double, grid: KeyGrid) {
+        partner?.letter(text, x, y, grid)
         token += text; decision = null
         if (spatial && !literalOnly && taps.size < MAX_LENGTH) taps.add(decoder.score(grid, x, y))
     }
     fun explicit(text: String) {
+        partner?.explicit(text)
         token += text; taps.clear(); decision = null; literalOnly = true
     }
     fun pop() {
+        partner?.pop()
         if (token.isEmpty()) return
         if (taps.size == token.length) taps.removeAt(taps.lastIndex)
         token = token.dropLast(1); decision = null
@@ -200,6 +241,10 @@ internal class TypingWord(val decoder: SpatialDecoder, val spatial: Boolean) {
      * autocorrect is on in a word field, never with caps lock; the keyboard decides that. */
     fun likelierKey(before: String, hit: Char, near: Map<Char, Double>, keys: Collection<Char>): Char {
         if (standIn || near.isEmpty()) return hit
+        // The letters likelier next in the language the sentence is in.
+        workingPartner()?.let { p ->
+            if (lean(p, before.dropLast(currentToken(before)?.length ?: 0)) > 0) return p.likelierKey(before, hit, near, keys)
+        }
         val token = currentToken(before)
         if (token == null && before.lastOrNull()?.let { it.isLetterOrDigit() || it == '\'' || it == '\u2019' } == true) return hit
         val continuations = model.continuations(lookup((token ?: "").lowercase())) ?: return hit
@@ -249,8 +294,42 @@ internal class TypingWord(val decoder: SpatialDecoder, val spatial: Boolean) {
     private fun protected() = token.drop(1).any { it.isUpperCase() } ||
         (model.language == "en" && token.lowercase() in shorthand)
     private fun cased(s: String) = if (token.firstOrNull()?.isUpperCase() == true) s.replaceFirstChar { it.uppercase() } else s
-    /** What space puts in place of the word alone, or null. */
+    /** What space puts in place of the word, or null. With a [partner] (iPhone Hex's cautiousReplacement), a word
+     * either language knows as typed stays as it is, except a sure fix of this language's (a two-letter slip, or
+     * English's "dont", "im") once the words before are in it, and its capital alone ("monday" -> "Monday"): the
+     * other list takes many of this one's typos for words. A typo either can fix gets the fix, though never the
+     * other's guess of a name; when both can, the fix in the language of the words before it, else the nearer
+     * spelling, else this language's. */
     fun replacement(): String? {
+        val p = workingPartner()
+        val personal = decoder.personal
+        if (p == null || token.isEmpty() || personal?.shortcut(lookup(token)) != null ||
+            (personal?.index(lookup(token)) ?: -1) >= 0) return ownReplacement().also { fixLanguage = it?.let { model.language } }
+        val lean = lean(p, before)
+        // This language's own accents decide before the other list ("mas" -> "más", though English knows "mas"),
+        // unless the sentence is in the other language.
+        if (lean <= 0) ownReplacement()?.takeIf { it != token && sameLetters(it, token) && !it.equals(token, ignoreCase = true) }
+            ?.let { fixLanguage = model.language; return it }
+        // The other language's list counts only once the sentence is in it, when its list is the books' spellings.
+        if (token.length >= 2 && p.knowsAsTyped(token, strictly = if (p.curatedList) lean < 0 else lean <= 0) && hasVowel(token) &&
+            // In a sentence in this language, only one of the other's common words is kept ("eel" and "rue" are
+            // English, but in Spanish they are slips for "del" and "fue").
+            (lean >= 0 || p.isCommon(token))) {
+            val own = ownReplacement()
+            val keep = own != null && ((lean < 0 && isSureFix(token)) || (lean <= 0 && own.equals(token, ignoreCase = true)))
+            fixLanguage = if (keep) model.language else null
+            return if (keep) own else null
+        }
+        val own = ownReplacement()
+        val theirs = if (token.length >= 2 && !knowsAsTyped(token, strictly = lean > 0)) p.ownReplacement()?.takeUnless { p.isName(it) } else null
+        val partners = theirs != null && (own == null || (!own.equals(theirs, ignoreCase = true) &&
+            if (lean != 0) lean > 0 else distance(token, theirs) < distance(token, own)))
+        fixLanguage = when { partners -> p.model.language; own != null -> model.language; else -> null }
+        return if (partners) theirs else own
+    }
+
+    /** What space puts in place of the word in this language alone, or null. */
+    private fun ownReplacement(): String? {
         val fix = withCapitals() ?: return null
         if (addsCapitals || token.any { it.isUpperCase() } || decoder.personal?.owns(fix) == true) return fix
         return fix.lowercase().takeIf { it != token }
@@ -334,8 +413,11 @@ internal class TypingWord(val decoder: SpatialDecoder, val spatial: Boolean) {
         finished = null; pending = null
         if (standIn || token.isEmpty() || (ending == '.' && token.lowercase() in abbreviations)) return null
         var result: Correction? = null
+        val p = workingPartner()
+        // Two words either language knows are never joined into one of this language's.
         if (word?.taps != null && word.space != null && spatial && !literalOnly && taps.size == token.length &&
-            listOf(word.typed, token).none { it.lowercase() in shorthand || decoder.personal?.owns(it) == true }) {
+            listOf(word.typed, token).none { it.lowercase() in shorthand || decoder.personal?.owns(it) == true ||
+                p?.knowsAsTyped(it, strictly = !p.curatedList) == true }) {
             val prev = previousWord(before.dropLast(word.text.length + 1)).takeIf { it.isNotEmpty() }
             decoder.merge(word.typed.lowercase(), word.taps, word.space, word.reach, token.lowercase(), taps,
                 model.context(prev.orEmpty()), knows(word.typed), knows(token), suggestSwearWords)?.let { merged ->
@@ -347,7 +429,11 @@ internal class TypingWord(val decoder: SpatialDecoder, val spatial: Boolean) {
             val now = fix ?: token
             // A word typed or corrected with an apostrophe is left as it is, whether that apostrophe
             // is straight or the smart ’ (Labs › Keyboard › Smart quotes).
-            val revised = if (word != null && '\'' !in lookup(word.typed)) revision(word.text, now) else null
+            // Beside a partner that knows the word before as typed, only a next word in this language revises it
+            // ("Im going" -> "I'm going", while German "Im Haus" stays).
+            val revisable = word != null && (p == null || !p.knowsAsTyped(word.text, strictly = !p.curatedList) ||
+                lean(p, now, commonFrom = 2) < 0)
+            val revised = if (word != null && revisable && '\'' !in lookup(word.typed)) revision(word.text, now) else null
             if (fix != null || revised != null)
                 result = Correction((if (revised != null) word!!.text + " " else "") + token, (revised?.let { "$it " } ?: "") + now)
         }
@@ -389,6 +475,65 @@ internal class TypingWord(val decoder: SpatialDecoder, val spatial: Boolean) {
         val reach = if (spaceTap != null) decoder.rowCost(grid!!, space!!.x, space.y) else Double.POSITIVE_INFINITY
         pending = Finished(text, if (sameLetters) token else text, wordTaps, spaceTap, reach, after)
     }
+    /** The partner while both can tell words from typos: models of their own, not a stand-in. */
+    private fun workingPartner(): TypingWord? = partner?.takeIf { !standIn && !it.standIn && it.model.language != model.language }
+
+    /** Whether this language takes [word], the word being typed (or the one before it), as typed: one of your own,
+     * shorthand, or the model's; or a spelling only its validity list has that its own autocorrect leaves alone.
+     * Those lists hold every spelling the books attest, the other language's words and typos among them (Spanish
+     * books spell "the", "dont" and "qie"), so a listed spelling this language would fix is no word of it. */
+    fun knowsAsTyped(word: String, strictly: Boolean = false): Boolean {
+        val lower = lookup(word.lowercase())
+        if (lower in shorthand || (decoder.personal?.index(lower) ?: -1) >= 0 || model.index(lower) >= 0) return true
+        // In a sentence in the other language, only the model's own words count.
+        if (strictly || !model.known(lower)) return false
+        return word != token || ownReplacement()?.equals(token, ignoreCase = true) != false
+    }
+
+    /** Whether the validity list is a curated dictionary (English's SCOWL), not every spelling the books attest
+     * (the other languages': Spanish books spell "dont", "im", "tou" and "gow"). */
+    val curatedList get() = model.language == "en"
+
+    /** Whether this language's list knows [word] only with a capital, and it isn't a German noun: a name. */
+    fun isName(word: String): Boolean {
+        val lower = word.lowercase()
+        if (lower.length < 2 || model.language == "de" || word.firstOrNull()?.isUpperCase() != true) return false
+        return (model.capitals?.percent(lower) ?: -1) >= 95
+    }
+
+    /** Whether [word] is among this language's commonest, about the top 2,000 (iPhone Hex's isCommon: -ln P at
+     * most 10 nats). */
+    fun isCommon(word: String): Boolean {
+        val index = model.index(lookup(word.lowercase()))
+        return index >= 0 && model.unigramCost(index) <= COMMON_WORD_COST
+    }
+
+    /** Which language the words in [text] are in (iPhone Hex's languageLean): above zero the partner's, below this
+     * one's, counting the last four that only one list knows, or, of [commonFrom] letters or more, that both know
+     * but only one has among its commonest words (French "de" and "la" are common in English books). */
+    fun lean(p: TypingWord, text: String, commonFrom: Int = 3): Int {
+        var lean = 0
+        val words = text.takeLast(120).split(WORD_BREAK).filter { it.length >= 2 }.takeLast(4)
+        for (word in words) {
+            val mine = knowsWord(word)
+            val theirs = p.knowsWord(word)
+            if (theirs && !mine) lean++
+            else if (mine && !theirs) lean--
+            else if (mine && word.length >= commonFrom) {
+                val myCommon = isCommon(word)
+                if (myCommon != p.isCommon(word)) lean += if (myCommon) -1 else 1
+            }
+        }
+        return lean
+    }
+
+    // A word of the language's own list, not your personal dictionary, which both languages share.
+    private fun knowsWord(word: String) = lookup(word.lowercase()).let { model.index(it) >= 0 || model.known(it) }
+
+    /** A fix this language makes even where the other knows the word: a two-letter slip, or English's
+     * contractions typed without the apostrophe ("dont", "im"). */
+    private fun isSureFix(token: String) = token.length == 2 || (model.language == "en" && englishFixes[token.lowercase()] != null)
+
     fun suggestions(): List<String> {
         if (standIn || token.length !in 1..MAX_LENGTH) return emptyList()
         val options = LinkedHashMap<String, Int>()
@@ -400,6 +545,29 @@ internal class TypingWord(val decoder: SpatialDecoder, val spatial: Boolean) {
     }
     companion object {
         const val MAX_LENGTH = 32
+        const val COMMON_WORD_COST = 10.0
+        private val WORD_BREAK = Regex("[^\\p{L}'\u2019]+")
+        /** Whether [a] and [b] spell the same letters but for accents and case. */
+        fun sameLetters(a: String, b: String) = plain(a) == plain(b)
+        private fun plain(s: String) = java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFD)
+            .filter { it.isLetter() || it == '\'' }
+        /** Whether [token] has a vowel: one without (an abbreviation such as "dk") isn't the other language's word. */
+        fun hasVowel(token: String) = java.text.Normalizer.normalize(token.lowercase(), java.text.Normalizer.Form.NFD)
+            .any { it in "aeiouyæøå" }
+        /** Letters to change, add or drop between [a] and [b], ignoring case, accents and apostrophes. */
+        fun distance(a: String, b: String): Int {
+            fun plain(s: String) = java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFD).filter { it.isLetter() }
+            val x = plain(a)
+            val y = plain(b)
+            var row = IntArray(y.length + 1) { it }
+            for (i in 1..x.length) {
+                val next = IntArray(y.length + 1)
+                next[0] = i
+                for (j in 1..y.length) next[j] = minOf(row[j] + 1, next[j - 1] + 1, row[j - 1] + if (x[i - 1] == y[j - 1]) 0 else 1)
+                row = next
+            }
+            return row[y.length]
+        }
         /** How far past its own touch area a likelier letter may reach, in dp, and the nats of odds
          * (ln of how many times likelier) it needs for each dp it claims (iOS letterReach, letterOddsPerPoint). */
         const val REACH = 5.0

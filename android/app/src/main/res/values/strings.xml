@@ -115,6 +115,9 @@
     <string name="labs_keyboard">Keyboard</string>
     <string name="labs_dictation">Dictation</string>
     <string name="keyboard_height">Keyboard height</string>
+    <string name="second_language">Second typing language</string>
+    <string name="second_language_detail">Type in both without switching</string>
+    <string name="second_language_off">Off</string>
     <string name="keyboard_height_detail">How tall the keys are · %1$d%%</string>
     <string name="parakeet">Parakeet speech model</string>
     <string name="parakeet_detail">Faster dictation, about 1.4 GB of memory. Norsk and Translate use Whisper</string>

@@ -169,6 +169,10 @@ public final class Replay {
         TypingModel model=TypingModel.Companion.file(new File(args[0]),lang);
         // `MODEL SET LANG OUT [GEOMETRY]`: with a measured geometry, any number of sentences.
         KeyGrid grid=args.length>4 ? geometry(args[4]) : originalGeometry(lang); TypingWord state=new TypingWord(new SpatialDecoder(model), true);
+        // -Dhex.partner=es: Labs › Keyboard › Second typing language, that language's model on the same keys.
+        String partner=System.getProperty("hex.partner");
+        if(partner!=null && !partner.equals(lang))
+            state.setPartner(new TypingWord(new SpatialDecoder(TypingModel.Companion.file(new File(new File(args[0]).getParentFile(),partner+".hextm"),partner)), true));
         apostropheKey=lang.equals("fr")&&cells==null ? new KeyPoint(201+3*39.5,66.5+56*2) : null;
         boolean apostropheOnLetters=lang.equals("fr");
         kept.add(state);
@@ -228,7 +232,7 @@ public final class Replay {
                     } else if(key!=' '&&state.getToken().isEmpty()&&!startsWord(state,out.toString())&&!(tracked&&out.length()==0)) {
                         out.append(key); tracked=false; shown=Collections.emptyList();
                     } else if(key==' ') {
-                        Correction fix=state.finish(' ',new KeyPoint(x,y),grid);
+                        Correction fix=state.finish(' ',new KeyPoint(x,y),grid,s->s);
                         if(fix!=null) {
                             if(!out.toString().endsWith(fix.getOriginal())) throw new IllegalStateException("Correction off the text");
                             out.replace(out.length()-fix.getOriginal().length(),out.length(),fix.getReplacement());

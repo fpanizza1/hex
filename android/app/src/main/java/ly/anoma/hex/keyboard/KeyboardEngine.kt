@@ -274,8 +274,11 @@ internal class KeyboardEngine(
         // dictionary, marked as a stand-in so none of English's words reach the strip or autocorrect.
         val language = typing ?: layoutLanguage().layoutCode
         val standIn = typing == null
+        // Labs › Keyboard › Second typing language: another model fed the same taps, never for a stand-in.
+        val second = feedback.secondLanguage?.layoutCode?.takeIf { !standIn && it != language }
         val active = word
         if (wordField && keepWord && active != null && active.standIn == standIn && active.decoder.model.language == language &&
+            active.partner?.decoder?.model?.language == second &&
             active.spatial == feedback.spatial && active.token.isNotEmpty() && endsWith(prefix + active.token)) {
             active.addsCapitals = feedback.autoCapitalize
             showPlane(); showSuggestions(active); return
@@ -286,6 +289,11 @@ internal class KeyboardEngine(
                 TypingWord(models.getOrPut(language) { loadDecoder(language).also(::loadPersonal) }, feedback.spatial)
                     .also {
                         it.standIn = standIn
+                        // A partner whose model can't be read leaves the keyboard in one language.
+                        it.partner = second?.let { code ->
+                            try { TypingWord(models.getOrPut(code) { loadDecoder(code).also(::loadPersonal) }, feedback.spatial) }
+                            catch (_: java.io.IOException) { null }
+                        }
                         it.suggestSwearWords = feedback.suggestSwearWords
                         it.addsCapitals = feedback.autoCapitalize
                     }
@@ -308,7 +316,7 @@ internal class KeyboardEngine(
             pendingChip = Runnable {
                 pendingChip = null
                 if (word === w && w.token == token) surface?.suggestions(Suggestion.withEmoji(w.strip(autocorrect = true).map {
-                    if (it.kind == Suggestion.Kind.Fix && feedback.blocked(w.decoder.model.language, token, it.text))
+                    if (it.kind == Suggestion.Kind.Fix && feedback.blocked(w.fixLanguage ?: w.decoder.model.language, token, it.text))
                         Suggestion(it.text, Suggestion.Kind.Word) else it
                 }.map(::shown), emojiFor(w)))
             }.also { main.postDelayed(it, CHIP_PAUSE_MS) }
@@ -475,10 +483,12 @@ internal class KeyboardEngine(
             if (swap != null && replace(swap.original, smartWord(swap.replacement) + " ")) { resetTyping(); afterSpace(now); return }
             if (feedback.autocorrect && correctingField && old.isNotEmpty() && endsWith(prefix + old)) {
                 val fix = w.finish(' ', point, grid, ::smartWord)
-                if (fix != null && !feedback.blocked(lang, fix.original, fix.replacement) &&
+                // A fix is turned down for the language that made it (a second typing language's or this one's).
+                val fixLang = w.fixLanguage ?: lang
+                if (fix != null && !feedback.blocked(fixLang, fix.original, fix.replacement) &&
                     replace(fix.original, fix.replacement + " ")) {
                     cancelChip()
-                    undo = Undo(lang, fix.original, fix.replacement)
+                    undo = Undo(fixLang, fix.original, fix.replacement)
                     if (expectedCaret >= 0) expectedCaret += fix.replacement.length + 1 - fix.original.length
                     w.reset(); afterSpace(now); return
                 }
@@ -523,7 +533,7 @@ internal class KeyboardEngine(
             if (swap != null && replace(swap.original, smartWord(swap.replacement) + value)) { resetTyping(); showPredictions(before()); inputDone(); return }
             if (feedback.autocorrect && correctingField && w.token.isNotEmpty() && endsWith(prefix + w.token)) {
                 val fix = w.finish(value[0], commit = ::smartWord)
-                if (fix != null && !feedback.blocked(w.decoder.model.language, fix.original, fix.replacement) &&
+                if (fix != null && !feedback.blocked(w.fixLanguage ?: w.decoder.model.language, fix.original, fix.replacement) &&
                     replace(fix.original, fix.replacement + value)) { resetTyping(); showPredictions(before()); inputDone(); return }
             }
         }

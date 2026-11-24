@@ -44,6 +44,11 @@ internal class TypingPreferences(context: Context) {
     var keyHeight: Int
         get() = prefs.getInt(KEY_HEIGHT, 100).coerceIn(MIN_KEY_HEIGHT, MAX_KEY_HEIGHT)
         set(value) { prefs.edit().putInt(KEY_HEIGHT, value.coerceIn(MIN_KEY_HEIGHT, MAX_KEY_HEIGHT)).apply() }
+    /** Labs › Keyboard › Second typing language: another language's words on the same keys (iPhone Hex's
+     * bilingual autocorrect), as its model code ("en", "es", …), or null for none, the default. */
+    var secondLanguage: Spoken?
+        get() = Spoken.matching(prefs.getString(SECOND_LANGUAGE, null))
+        set(value) { prefs.edit().putString(SECOND_LANGUAGE, value?.layoutCode).apply() }
     /** Labs › Keyboard › Local currency: the phone's own currency on the 123 page instead of $. Off by default. */
     var localCurrency: Boolean
         get() = prefs.getBoolean(LOCAL_CURRENCY, false)
@@ -84,6 +89,7 @@ internal class TypingPreferences(context: Context) {
     companion object {
         const val SUGGEST_SWEAR_WORDS = "suggestSwearWords"
         const val NUMBER_ROW = "numberRow"
+        const val SECOND_LANGUAGE = "secondLanguage"
         const val KEY_HEIGHT = "keyHeight"
         const val MIN_KEY_HEIGHT = 70
         const val MAX_KEY_HEIGHT = 120
