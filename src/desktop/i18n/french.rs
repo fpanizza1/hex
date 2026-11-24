@@ -1,7 +1,6 @@
 //! French (fr) interface strings; not yet reviewed by a native speaker.
 //! Terms: dictation is "dictée", shortcut "raccourci", vocabulary
 //! "vocabulaire", Settings "Réglages", and meetings "réunions".
-
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -280,6 +279,12 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Hardware unknown", "Matériel inconnu"),
     ("Conditions unknown", "Conditions inconnues"),
     ("Speed: upstream figure; hardware and method unknown", "Vitesse : chiffre du projet d'origine ; matériel et méthode inconnus"),
+    ("Model switch shortcut", "Raccourci de changement de modèle"),
+    ("Swaps dictation to the other model, and back", "Bascule la dictée sur l'autre modèle, et inversement"),
+    ("Other model", "Autre modèle"),
+    ("The model and language the shortcut switches to", "Le modèle et la langue vers lesquels le raccourci bascule"),
+    ("One shortcut swaps dictation to another model and language, and pressing it again swaps back", "Un raccourci bascule la dictée vers un autre modèle et une autre langue, et appuyer à nouveau revient en arrière"),
+    ("Couldn't switch the speech model: {}", "Impossible de changer de modèle de parole : {}"), ("Couldn't switch the speech model: {} isn't installed", "Impossible de changer de modèle de parole : {} n'est pas installé"),
     ("Second dictation shortcut", "Second raccourci de dictée"),
     ("Another shortcut that dictates like the main one, such as a key on an external keyboard", "Un autre raccourci qui dicte comme le principal, par exemple une touche d'un clavier externe"),
     ("Smart spacing", "Espacement intelligent"),

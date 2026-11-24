@@ -26,10 +26,18 @@ impl LinuxDesktopHost {
             return Err(color_eyre::eyre::eyre!(error));
         }
         if self.transcription_preparation.is_some() {
-            self.cancel_transcription_preparation();
-            let error = "The previous model preparation is still stopping".to_string();
-            self.transcription_error = Some(error.clone());
-            return Err(color_eyre::eyre::eyre!(error));
+            // A newer choice supersedes an uncommitted swap: its load is
+            // canceled and dropped, so it can never commit a model.
+            if self.swap_other.take().is_some() {
+                if let Some(preparation) = self.transcription_preparation.take() {
+                    preparation.canceled.store(true, Ordering::Relaxed);
+                }
+            } else {
+                self.cancel_transcription_preparation();
+                let error = "The previous model preparation is still stopping".to_string();
+                self.transcription_error = Some(error.clone());
+                return Err(color_eyre::eyre::eyre!(error));
+            }
         }
         let model = selection.model;
         let definition = crate::transcription::models::validate(&selection)?;
@@ -87,6 +95,45 @@ impl LinuxDesktopHost {
         });
         self.transcription_error = None;
         Ok(())
+    }
+
+    /// Labs › Model switch shortcut: prepares the saved other model,
+    /// installed only, and remembers what it swaps back to. Both selections
+    /// are saved together once that preparation loads; a failure leaves the
+    /// running model and the saved selection as they were.
+    pub(super) fn swap_model(&mut self) {
+        use crate::transcription::other_model::{self, SwitchError};
+        let plan = match other_model::planned(&self.settings) {
+            Ok(Some(plan)) => plan,
+            Ok(None) => return,
+            Err(error) => {
+                self.report_switch_error(&error);
+                return;
+            }
+        };
+        if let Err(error) = other_model::installed(&plan) {
+            self.report_switch_error(&error);
+            return;
+        }
+        self.manual_choice();
+        match self.prepare_transcription(plan.to, true, false) {
+            Ok(()) => self.swap_other = Some(plan.other),
+            Err(error) => self.report_switch_error(&SwitchError::Invalid(format!("{error:#}"))),
+        }
+    }
+
+    /// Shows a failed switch in Settings, and beside the HUD when Labs ›
+    /// Failure notices is on.
+    fn report_switch_error(&mut self, error: &crate::transcription::other_model::SwitchError) {
+        self.transcription_error = Some(error.message());
+        if self.settings.labs.failure_notices
+            && let Some((template, detail)) = error.notice()
+            && let Some(listener) = &self.listener
+        {
+            listener.update(super::ListenerUpdate::Notice(super::tr_fill(
+                template, detail,
+            )));
+        }
     }
 
     /// Verifies and loads the selected model when its file is here but not

@@ -101,6 +101,9 @@ pub enum ControlCommand {
     /// Labs › Transform typed text (Linux): runs the focused field's text
     /// through its Output steps and replaces it, as its shortcut does.
     TypedText,
+    /// Labs › Model switch shortcut: swaps the dictation model with the saved
+    /// other one, as its shortcut does.
+    ModelSwitch,
     /// Labs › Screenshots (macOS): the display under the pointer, or with
     /// `pick` the picker its shortcut opens.
     Screenshot {
@@ -1261,6 +1264,7 @@ mod tests {
             },
             ControlCommand::PasteLast,
             ControlCommand::TypedText,
+            ControlCommand::ModelSwitch,
             ControlCommand::Screenshot { pick: false },
             ControlCommand::Screenshot { pick: true },
             ControlCommand::MeetingRecord {

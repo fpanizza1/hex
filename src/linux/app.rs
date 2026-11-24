@@ -25,6 +25,7 @@ use crate::desktop::host::{
     DesktopAction, DesktopListenerSnapshot, DesktopShortcut, DesktopSnapshot,
     DesktopTranscriptionSnapshot, ListenerStatus,
 };
+use crate::desktop::i18n::tr_fill;
 use crate::linux::dictation::ListenerUpdate;
 use crate::linux::input::{LinuxHotkey, ListenerCommand};
 use crate::linux::service::{
@@ -34,6 +35,8 @@ use crate::linux::service::{
 mod control;
 mod host;
 mod model;
+mod save;
+use self::save::{gnome_shortcuts_key, save_listening, save_with, settings_modified};
 
 /// The host's refresh while it starts, stops, or prepares something.
 const REFRESH_INTERVAL: Duration = Duration::from_millis(20);
@@ -67,6 +70,9 @@ pub(crate) enum ShortcutTarget {
     /// Labs › Second dictation shortcut: another key that dictates exactly
     /// like the dictation shortcut.
     SecondDictation,
+    /// Labs › Model switch shortcut: swaps the dictation model with the
+    /// saved other one.
+    ModelSwitch,
     /// Toggle mode's cancel shortcut.
     Cancel,
 }
@@ -153,6 +159,9 @@ struct LinuxDesktopHost {
     shortcut_edit: Option<ShortcutEdit>,
     prepared_transcriber: Option<crate::transcription::local_transcriber::LocalTranscriber>,
     transcription_preparation: Option<TranscriptionPreparation>,
+    /// The selection the running swap preparation swaps back to, while a
+    /// Labs › Model switch preparation is in flight.
+    swap_other: Option<crate::app_settings::KeyboardModelChoice>,
     /// The preparation Enable started to check the selected model. Only this
     /// one is canceled by Disable; a model download is left running.
     checking: bool,
@@ -204,6 +213,10 @@ pub(crate) enum HostRequest {
         language: String,
     },
     CancelModel,
+    /// Labs › Model switch shortcut: swaps the dictation model with the saved
+    /// other one, through the same installed-only preparation as a picker
+    /// choice.
+    SwapModel,
 }
 
 struct Shared {
@@ -278,6 +291,10 @@ impl HostHandle {
                 HostRequest::SetShortcut { target, shortcut } => host.set_hotkey(target, shortcut),
                 HostRequest::ChooseModel { model, language } => {
                     host.choose_transcription(model, language)
+                }
+                HostRequest::SwapModel => {
+                    host.swap_model();
+                    Ok(())
                 }
                 HostRequest::CancelModel => {
                     host.manual_choice();
@@ -662,6 +679,7 @@ impl LinuxDesktopHost {
             shortcut_edit: None,
             prepared_transcriber: None,
             transcription_preparation: None,
+            swap_other: None,
             checking: false,
             transcription_error: None,
             updater,
@@ -887,6 +905,9 @@ impl LinuxDesktopHost {
     }
 
     fn refresh(&mut self) {
+        if crate::transcription::other_model::take_request() {
+            self.swap_model();
+        }
         self.switch_with_keyboard();
         // Restart to update asks systemd to restart Hex after the updater's
         // final check; only a failure needs showing, and a restart that never
@@ -915,8 +936,11 @@ impl LinuxDesktopHost {
                 .join()
                 .unwrap_or_else(|_| Err("model preparation worker stopped unexpectedly".into()));
             if was_canceled {
+                self.swap_other = None;
                 self.transcription_error = None;
             } else {
+                let swap_other = self.swap_other.take();
+                let was_swap = swap_other.is_some();
                 match result {
                     Ok(prepared) => {
                         let selection = prepared.selection.clone();
@@ -927,10 +951,15 @@ impl LinuxDesktopHost {
                         let effective = crate::transcription::custom_models::runnable(
                             &self.settings.transcription,
                         );
-                        let saved = if selection == effective {
+                        let saved = if selection == effective && swap_other.is_none() {
                             Ok(self.settings.clone())
                         } else {
-                            save_with(|settings| settings.remember_transcription(selection))
+                            save_with(|settings| {
+                                if let Some(other) = swap_other {
+                                    settings.model_switch_other = Some(other);
+                                }
+                                settings.remember_transcription(selection)
+                            })
                         };
                         match saved {
                             Ok(candidate) => {
@@ -980,6 +1009,15 @@ impl LinuxDesktopHost {
                             self.keyboard_switcher.fail(Instant::now());
                         }
                         self.note_model_check_failure();
+                        if was_swap
+                            && self.settings.labs.failure_notices
+                            && let Some(listener) = &self.listener
+                        {
+                            listener.update(ListenerUpdate::Notice(tr_fill(
+                                "Couldn't switch the speech model: {}",
+                                &error,
+                            )));
+                        }
                         self.transcription_error = Some(error);
                     }
                 }
@@ -1199,6 +1237,7 @@ impl LinuxDesktopHost {
                         ShortcutTarget::SecondDictation => {
                             settings.second_dictation_hotkey = Some(binding)
                         }
+                        ShortcutTarget::ModelSwitch => settings.model_switch_hotkey = Some(binding),
                         ShortcutTarget::Cancel => settings.cancel_hotkey = binding,
                     }
                 })
@@ -1305,61 +1344,10 @@ impl LinuxDesktopHost {
         if let Some(preparation) = &self.transcription_preparation {
             preparation.canceled.store(true, Ordering::Relaxed);
         }
+        self.swap_other = None;
         self.checking = false;
         self.transcription_error = None;
     }
-}
-
-/// Saves one host-owned change on top of the current `settings.json`, so
-/// edits the window saved meanwhile survive.
-/// Annotate's shortcut, while Annotate is on.
-fn capture_shortcut(settings: &AppSettings) -> Option<&crate::app_settings::HotkeyBinding> {
-    #[cfg(hex_capture)]
-    if settings.capture.enabled {
-        return Some(&settings.capture.hotkey);
-    }
-    let _ = settings;
-    None
-}
-
-/// What the GNOME custom shortcuts were last synced for: a new key means an
-/// entry was added, removed, or rebound. Typed text is included while its
-/// lab is on and its shortcut is bound, so toggling either resyncs.
-fn gnome_shortcuts_key(settings: &AppSettings, wanted: bool) -> String {
-    format!(
-        "{wanted} {:?} {:?} {:?} {:?}",
-        settings.dictation_hotkey,
-        settings.paste_last_hotkey,
-        capture_shortcut(settings),
-        settings.active_typed_text_hotkey()
-    )
-}
-
-fn settings_modified() -> Option<std::time::SystemTime> {
-    let path = crate::app_settings::path().ok()?;
-    std::fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-}
-
-fn save_with(change: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> {
-    let mut settings = AppSettings::load()?;
-    let base = settings.clone();
-    change(&mut settings);
-    base.update(&settings)
-}
-
-#[cfg(not(test))]
-fn save_listening(_: &AppSettings, enabled: bool) -> Result<AppSettings> {
-    save_with(|settings| settings.enable_on_launch = enabled)
-}
-
-/// Tests never write the person's `settings.json`.
-#[cfg(test)]
-fn save_listening(current: &AppSettings, enabled: bool) -> Result<AppSettings> {
-    let mut settings = current.clone();
-    settings.enable_on_launch = enabled;
-    Ok(settings)
 }
 
 impl Drop for LinuxDesktopHost {

@@ -65,6 +65,10 @@ pub(crate) trait Host {
     /// Prepares `selection` (downloading it when missing) and switches to
     /// it once it is ready.
     fn choose_model(&self, selection: TranscriptionSelection) -> Result<(), ControlError>;
+    /// Labs › Model switch shortcut from `hex model switch`: swaps the
+    /// dictation model with the saved other one, through the same
+    /// installed-only preparation as a picker choice.
+    fn model_switch(&self) -> Result<(), ControlError>;
     fn cancel_model(&self);
     fn check_for_updates(&self) -> Result<(), ControlError>;
     /// Launch at login, after setting it when `enabled` is given; `None`
@@ -118,6 +122,44 @@ pub(crate) fn answer(host: &dyn Host, request: ControlRequest) -> ControlRespons
     .into()
 }
 
+/// `hex model switch`: the same installed-only preparation as a picker
+/// choice, refused while Hex records. A failed preparation keeps the running
+/// model and the saved selection.
+fn switch_model(host: &dyn Host) -> Result<ControlReply, ControlError> {
+    use crate::transcription::other_model::{self, SwitchError};
+    let state = host.state()?;
+    let capture = host.capture()?;
+    if capture.recording.is_some() || capture.pending_jobs > 0 {
+        return Err(ControlError::new(
+            "busy",
+            "Hex is dictating; try again once it finishes",
+        ));
+    }
+    let plan = match other_model::planned(&state.settings).map_err(|error| match error {
+        SwitchError::NotInstalled(message) => ControlError::new("not-installed", message),
+        other => ControlError::new("unavailable", other.message()),
+    })? {
+        Some(plan) => plan,
+        None => {
+            return Ok(ControlReply::unchanged(format!(
+                "Already using {} · {}",
+                crate::transcription::models::definition(state.settings.transcription.model).name,
+                crate::transcription::models::language_name(&state.settings.transcription.language)
+            )));
+        }
+    };
+    other_model::installed(&plan).map_err(|error| match error {
+        SwitchError::NotInstalled(message) => ControlError::new("not-installed", message),
+        other => ControlError::new("unavailable", other.message()),
+    })?;
+    host.model_switch()?;
+    Ok(ControlReply::done(format!(
+        "Switching to {} · {}; Hex keeps the current model if it fails",
+        crate::transcription::models::definition(plan.to.model).name,
+        crate::transcription::models::language_name(&plan.to.language)
+    )))
+}
+
 fn command(host: &dyn Host, command: ControlCommand) -> ControlReply {
     let reply =
         |result: Result<ControlReply, ControlError>| result.unwrap_or_else(ControlReply::from);
@@ -169,6 +211,7 @@ fn command(host: &dyn Host, command: ControlCommand) -> ControlReply {
             host.typed_text()
                 .map(|()| ControlReply::done("Transforming the focused text")),
         ),
+        ControlCommand::ModelSwitch => reply(switch_model(host)),
         ControlCommand::MeetingRecord { title } => meeting(false, title),
         ControlCommand::MeetingStop => meeting(true, None),
         ControlCommand::MeetingCopyLast => match crate::meeting::runtime::copy_last_transcript() {
@@ -721,6 +764,9 @@ mod tests {
             ControlReply::done("Opened onboarding")
         }
         fn choose_model(&self, _: TranscriptionSelection) -> Result<(), ControlError> {
+            Ok(())
+        }
+        fn model_switch(&self) -> Result<(), ControlError> {
             Ok(())
         }
         fn cancel_model(&self) {}

@@ -849,6 +849,15 @@ Dictate without processing (Output pane; unbound)   // dictation.md
   -> records and pastes as heard, skipping Output; History kind Raw
   -> a shortcut on the dictation chord is cleared when settings load or save
 
+Labs > Model switch shortcut (off)      // labs.md; swaps the dictation model with a saved other one, and back
+  -> General shows "Model switch shortcut" and "Other model" (installed model + language)
+  -> macOS: a hotkey action beside Paste Last (suppression::model_switch_action)
+  -> Windows: its own hook trigger and HotkeyAction::ModelSwitch
+  -> Linux: an X11 grab or the shortcuts portal's "Model switch shortcut"
+  -> hex model switch                      // the same swap from a terminal
+  -> the host's installed-only preparation saves both selections on commit
+  -> the same choice again is a no-op; a failed preparation keeps the active model
+
 Labs > Second dictation shortcut (off)   // labs.md; issue 627
   -> General shows "Second dictation shortcut" under Shortcut (unbound, clearable)
   -> it dictates like the shortcut: Hold/Toggle, double-tap lock, release

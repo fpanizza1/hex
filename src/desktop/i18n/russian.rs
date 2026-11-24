@@ -1,7 +1,6 @@
 //! Russian (ru) interface strings; not yet reviewed by a native speaker.
 //! Terms: dictation is "диктовка", shortcut "сочетание клавиш", Settings
 //! "Настройки", meetings "встречи", and vocabulary "словарь".
-
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -277,6 +276,12 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Hardware unknown", "Оборудование неизвестно"),
     ("Conditions unknown", "Условия неизвестны"),
     ("Speed: upstream figure; hardware and method unknown", "Скорость: данные первоисточника; оборудование и метод неизвестны"),
+    ("Model switch shortcut", "Сочетание для смены модели"),
+    ("Swaps dictation to the other model, and back", "Переключает диктовку на другую модель и обратно"),
+    ("Other model", "Другая модель"),
+    ("The model and language the shortcut switches to", "Модель и язык, на которые переключает сочетание"),
+    ("One shortcut swaps dictation to another model and language, and pressing it again swaps back", "Одно сочетание переключает диктовку на другую модель и язык, а повторное нажатие возвращает назад"),
+    ("Couldn't switch the speech model: {}", "Не удалось переключить модель распознавания речи: {}"), ("Couldn't switch the speech model: {} isn't installed", "Не удалось переключить модель распознавания речи: {} не установлена"),
     ("Second dictation shortcut", "Второе сочетание для диктовки"),
     ("Another shortcut that dictates like the main one, such as a key on an external keyboard", "Ещё одно сочетание, которое диктует как основное, например клавиша на внешней клавиатуре"),
     ("Smart spacing", "Умные пробелы"),

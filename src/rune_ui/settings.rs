@@ -985,6 +985,7 @@ pub(super) fn hotkey_key(target: ShortcutTarget) -> &'static str {
         #[cfg(all(hex_capture, target_os = "macos"))]
         ShortcutTarget::CaptureReplay => "capture-replay-hotkey",
         ShortcutTarget::SecondDictation => "second-dictation-hotkey",
+        ShortcutTarget::ModelSwitch => "model-switch-hotkey",
         // Settings keeps at most four rows, so every one has its own key.
         #[cfg(target_os = "macos")]
         ShortcutTarget::ExtraDictation(index) => EXTRA_HOTKEY_KEYS
