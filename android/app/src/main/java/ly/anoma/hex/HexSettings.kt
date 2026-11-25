@@ -443,8 +443,12 @@ internal fun HexSettings(setup: Setup, speech: SpeechPreferences, typing: Typing
                                     Rule()
 
                                     when (english) {
-                                        ModelStore.State.Available, ModelStore.State.WaitingForWifi -> Entry(stringResource(R.string.parakeet_download, size), value = "",
+                                        ModelStore.State.Available -> Entry(stringResource(R.string.parakeet_download, size), value = "",
                                             action = { ModelStore.english.download(context) })
+                                        // ~1.4 GB: it starts by itself on Wi-Fi, or now with Use mobile data.
+                                        ModelStore.State.WaitingForWifi -> Entry(stringResource(R.string.fast_english_waiting_wifi, size),
+                                            value = stringResource(R.string.model_use_mobile_data),
+                                            action = { ModelStore.english.useMobileData(context) }, titleLines = 2)
                                         is ModelStore.State.Loading -> Entry(stringResource(R.string.parakeet_loading, english.percent))
                                         is ModelStore.State.Retry -> Entry(stringResource(when (english.problem) {
                                             ModelStore.Problem.Connection -> R.string.parakeet_no_connection

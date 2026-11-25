@@ -352,10 +352,27 @@ internal class PinnedModel(private val folder: String, private val files: List<M
     private fun have(app: Context) = files.sumOf { if (done(app, it)) it.size else part(app, it).length().coerceIn(0, it.size) }
     private fun percent(bytes: Long) = (bytes * 100 / total).toInt().coerceAtMost(99)
 
+    private fun mobileDataChosen(app: Context) = choices(app).getBoolean("$folder.mobileData", false)
+
+    /** Whether a download asked for now starts at once: unless the network charges for data ([unmetered] false) and the
+     * person didn't choose mobile data for it. A tap and Labs › Pick the English model for this phone ask the same way
+     * ([download]); only Use mobile data ([useMobileData]) chooses it. The four files are about 1.4 GB. */
+    internal fun startsNow(mobileDataChosen: Boolean, unmetered: Boolean?) = !waitsForWifi(mobileDataChosen, unmetered)
+
+    /** Downloads now on mobile data too (the waiting row's action). */
+    @Synchronized fun useMobileData(context: Context) {
+        val app = context.applicationContext
+        choices(app).edit().putBoolean("$folder.mobileData", true).apply()
+        download(app)
+    }
+
     @Synchronized fun download(context: Context) {
         val app = context.applicationContext
         if (installed(app) != null) { progress.value = ModelStore.State.Ready; return }
         if (running) return
+        if (!startsNow(mobileDataChosen(app), unmeteredNetwork(app))) {
+            waiting = true; progress.value = ModelStore.State.WaitingForWifi; return
+        }
         running = true; waiting = false
         dir(app).mkdirs()
         progress.value = ModelStore.State.Loading(percent(have(app)))
@@ -378,7 +395,8 @@ internal class PinnedModel(private val folder: String, private val files: List<M
             catch (_: Exception) { ModelStore.State.Retry(ModelStore.Problem.Server) }
             synchronized(this) {
                 running = false
-                if (result == ModelStore.State.Retry(ModelStore.Problem.Connection) && (started == 0 || stops != since)) {
+                if (result == ModelStore.State.Retry(ModelStore.Problem.Connection) && (started == 0 || stops != since ||
+                        !startsNow(mobileDataChosen(app), unmeteredNetwork(app)))) {
                     waiting = true
                     if (started > 0) download(app)
                 } else progress.value = result
