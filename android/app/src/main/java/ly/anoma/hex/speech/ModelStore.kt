@@ -41,9 +41,15 @@ internal interface OfflineScreen
  * SHA-256 ([small] from setup or Dictation settings, [english] from Labs or, with Labs › Pick the English model for this
  * phone, when Hex is opened). The keyboard never calls it. A wifiFirst download (both models, whoever asked) waits for
  * an unmetered network ([State.WaitingForWifi]) unless the person chooses mobile data. */
+/** What both model stores answer, so a test (or a caller with either) can ask about a download the same way: whether a
+ * request starts now on this network, or waits for Wi-Fi. */
+internal interface ModelDownload {
+    fun startsNow(mobileDataChosen: Boolean, unmetered: Boolean?): Boolean
+}
+
 internal class ModelStore private constructor(private val name: String, private val size: Long, private val hash: String,
                                               private val url: String, private val extension: String,
-                                              internal val wifiFirst: Boolean = false) {
+                                              internal val wifiFirst: Boolean = false) : ModelDownload {
     companion object {
         /** Whisper small, the default speech model. */
         val small = ModelStore("whisper-small", 190085487L, "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
@@ -181,7 +187,7 @@ internal class ModelStore private constructor(private val name: String, private 
     /** Whether a download asked for now starts at once: always for a file that isn't Wi-Fi-first, else unless the network
      * charges for data ([unmetered] false) and the person didn't choose mobile data. A tap and Labs › Pick the English model
      * for this phone ask the same way ([download]); only Use mobile data ([useMobileData]) chooses it. */
-    internal fun startsNow(mobileDataChosen: Boolean, unmetered: Boolean?) = !wifiFirst || !waitsForWifi(mobileDataChosen, unmetered)
+    override fun startsNow(mobileDataChosen: Boolean, unmetered: Boolean?) = !wifiFirst || !waitsForWifi(mobileDataChosen, unmetered)
 
     @Synchronized fun download(context: Context) {
         val app = context.applicationContext
@@ -297,7 +303,7 @@ internal class ModelStore private constructor(private val name: String, private 
 }
 
 /** A model of several pinned files ([folder] under no-backup storage), fetched one after another. */
-internal class PinnedModel(private val folder: String, private val files: List<ModelStore.Pinned>) {
+internal class PinnedModel(private val folder: String, private val files: List<ModelStore.Pinned>) : ModelDownload {
     private val total = files.sumOf { it.size }
     private class Failure(val problem: ModelStore.Problem) : Exception()
     private val progress = MutableStateFlow<ModelStore.State>(ModelStore.State.Available)
@@ -359,7 +365,7 @@ internal class PinnedModel(private val folder: String, private val files: List<M
     /** Whether a download asked for now starts at once: unless the network charges for data ([unmetered] false) and the
      * person didn't choose mobile data for it. A tap and Labs › Pick the English model for this phone ask the same way
      * ([download]); only Use mobile data ([useMobileData]) chooses it. The four files are about 1.4 GB. */
-    internal fun startsNow(mobileDataChosen: Boolean, unmetered: Boolean?) = !waitsForWifi(mobileDataChosen, unmetered)
+    override fun startsNow(mobileDataChosen: Boolean, unmetered: Boolean?) = !waitsForWifi(mobileDataChosen, unmetered)
 
     /** Downloads now on mobile data too (the waiting row's action). */
     @Synchronized fun useMobileData(context: Context) {
