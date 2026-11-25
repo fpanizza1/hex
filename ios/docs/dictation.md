@@ -331,7 +331,7 @@ the App Group, or the keyboard's own Library for an unsigned build) from the fir
 `ParakeetLiveTranscriber` (the audio so far again about once a second, a 20 s window) is
 written for when the speech model's own words should show, and not used yet.
 
-## Apple Intelligence cleanup (Settings › Experiments › Clean up with Apple Intelligence, iOS 26+)
+## Apple Intelligence cleanup (Settings › Labs › Clean up with Apple Intelligence, iOS 26+)
 
 Off by default. For every style but `Verbatim`,
 one on-device FoundationModels pass before formatting fixes clearly
@@ -347,7 +347,7 @@ until Multilingual is picked, on iPhones with 6 GB or more (under that the switc
 says it needs 6 GB, and the row doesn't show). It moved there from Experiments on
 2026-11-24. Each choice says what it means before anything downloads: English, "For
 English. A 464.4 MB download on Wi-Fi."; Multilingual, its 25 languages by name, "A 632.2 MB
-download as soon as you pick it. Hex dictates them with it too."; both, that other languages
+download on Wi-Fi. Hex dictates them with it too."; both, that other languages
 use Apple's speech recognition and that only the picked model stays on the iPhone. Only the
 picked one is kept, but the other goes only once the picked one is downloaded and has loaded
 once, in Hex or the keyboard (`SpeechModelChoice.unpicked`, checked whenever Hex comes to the
@@ -425,7 +425,19 @@ when the keyboard reports its limit. Turned on by hand (a stored true, including
 the builds where it was off by default) it downloads at once on any connection. Until
 then the row says what it waits for: "Downloads after you first use the Hex keyboard",
 "Downloads on Wi-Fi", "Downloads once the iPhone has 2 GB free", "Only for English
-dictation". Home shows the same status under "New: Hex's own speech model" wherever the
+dictation".
+
+Both of Model's downloads follow one rule (`SpeechModelDownloadNetwork`, TestFlight build
+151: Multilingual started 632 MB over mobile data the moment it was picked, while English
+waited for Wi-Fi): on Wi-Fi a picked model downloads as before; off Wi-Fi it waits, its line
+says "Downloads on Wi-Fi." and **Use mobile data** beside it starts it now. Wi-Fi coming back
+starts a waiting download by itself, and a download Hex started on Wi-Fi stops where it is
+(its files resume) when Wi-Fi goes, as English's always did. Use mobile data is one
+decision for that model's download, kept in the App Group (`settings.speechModel.mobileData`)
+until it is on the iPhone: a stop, a Try again or the next launch carries on over any
+connection. Picking the other model forgets it, so that model's download asks again. Home's
+multilingual line has the same action; Home's English card opens Settings instead.
+`--simulate-cellular` makes the simulator read as off Wi-Fi. Home shows the same status under "New: Hex's own speech model" wherever the
 keyboard would use it (`SpeechModelHomeCard`: the switch on, an iPhone that fits, English
 and no other engine); once it's ready in the keyboard the card can be dismissed, for good. The keyboard's own dictation transcribes with Parakeet in
 the keyboard's process (`HEXKeyboard/KeyboardParakeet.swift`), with the app closed:
@@ -711,7 +723,7 @@ Spanish, German ones (äh, ähm, öhm) in German, and none elsewhere (Norwegian
 "er" is "is", Portuguese "um" is "a"); translation's source is the dictation
 language rather than a guess. Custom vocabulary works in any language.
 
-## Voice isolation (Settings › Experiments › Voice isolation)
+## Voice isolation (Settings › Labs › Voice isolation)
 
 Off by default
 (`experiments.voiceIsolation`, App Group). While on, the app records in
@@ -724,7 +736,7 @@ profile. With it off, both record exactly as before. Not verified on a
 device: that Control Center actually offers Voice Isolation for Hex, and how
 the mode changes a recording's level.
 
-## Two-language dictation (Settings › Experiments › Two-language dictation, iOS 26+)
+## Two-language dictation (Settings › Labs › Two-language dictation, iOS 26+)
 
 Off by default (`experiments.twoLanguageDictation`, App Group). While on, and while
 dictation uses Apple Speech's `SpeechTranscriber`, one recording is read twice: in the
@@ -795,7 +807,7 @@ not only when the row
 appears. A long press on a language (a chip, or a row on the Hex key menu's Language
 page) shows **Remove**, which takes it off (`settings.dictationLanguage.removed`, so one
 of the iPhone's own languages stays off too) and puts the one set back on Automatic;
-Settings › Dictation language's **Remove from keyboard** does the same (TestFlight build
+Settings › Dictation language's **Remove a quick-switch language** does the same (TestFlight build
 56: a language couldn't be removed, and one could only be added in Hex). **More
 languages…** lists every other language Apple Speech has, the iPhone's own first, and
 picking one there adds it (in the dictation bar the list takes the keys' place). Removing

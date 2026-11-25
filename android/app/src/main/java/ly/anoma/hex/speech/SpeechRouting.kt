@@ -5,10 +5,11 @@ internal enum class Engine { Standard, English }
 
 /** Parakeet takes the 25 European languages [Parakeet.languages] lists, decided from the options captured when the
  * dictation started, so changing the language before it finishes doesn't move it. Translate stays with today's model:
- * Parakeet only writes what it hears, in its own language. */
+ * Parakeet only writes what it hears, in its own language. So does Automatic choosing among several languages (Labs ›
+ * Automatic listens for the language): which one was spoken is known only once today's model heard it. */
 internal fun engineFor(options: SpeechOptions): Engine =
-    if (options.fastEnglish && !options.translate && options.spoken.code in Parakeet.languages) Engine.English
-    else Engine.Standard
+    if (options.fastEnglish && !options.translate && options.candidates.size <= 1 && options.spoken.code in Parakeet.languages)
+        Engine.English else Engine.Standard
 
 /** Why the faster model couldn't run: no verified file (missing, or failing its SHA-256), Android short of memory for
  * it (before loading it, or its load ran out), or a load that failed otherwise. */
@@ -26,8 +27,17 @@ internal sealed interface EnglishResult {
  * faster one couldn't run ([Unready] says why) or failed. */
 internal enum class RanOn { Standard, Faster, NoFile, LowMemory, LoadFailed, FasterFailed }
 
-/** A dictation's text (null when it failed) and the model that wrote it. */
-internal data class Decoded(val text: String?, val ran: RanOn = RanOn.Standard) {
+/** What Labs › Automatic listens for the language chose for a dictation among [candidates] (the keyboard's language first):
+ * the one it was written in ([chosen], an index), each candidate's probability among them and the choice's microseconds.
+ * [probabilities] is null when there was one candidate, so nothing was chosen. */
+internal class LanguageChoice(val candidates: List<DictationLanguage>, val chosen: Int, val probabilities: List<Double>?,
+                              val micros: Long = 0) {
+    val language get() = candidates[chosen]
+}
+
+/** A dictation's text (null when it failed), the model that wrote it and, with Labs › Automatic listens for the language,
+ * what it chose. */
+internal data class Decoded(val text: String?, val ran: RanOn = RanOn.Standard, val choice: LanguageChoice? = null) {
     /** A shortage of memory sent it to today's model. */
     val lowMemory get() = ran == RanOn.LowMemory
 }
