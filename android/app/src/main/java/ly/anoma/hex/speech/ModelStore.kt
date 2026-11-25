@@ -352,6 +352,8 @@ internal class PinnedModel(private val folder: String, private val files: List<M
     private fun have(app: Context) = files.sumOf { if (done(app, it)) it.size else part(app, it).length().coerceIn(0, it.size) }
     private fun percent(bytes: Long) = (bytes * 100 / total).toInt().coerceAtMost(99)
 
+    /** The model settings store, as [ModelStore]'s: Use mobile data is kept per model. */
+    private fun choices(app: Context) = app.getSharedPreferences("models", Context.MODE_PRIVATE)
     private fun mobileDataChosen(app: Context) = choices(app).getBoolean("$folder.mobileData", false)
 
     /** Whether a download asked for now starts at once: unless the network charges for data ([unmetered] false) and the
