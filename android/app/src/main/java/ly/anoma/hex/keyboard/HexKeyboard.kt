@@ -44,6 +44,7 @@ import ly.anoma.hex.speech.SpeechPreferences
 import ly.anoma.hex.speech.Spoken
 import ly.anoma.hex.speech.keepAwake
 import ly.anoma.hex.speech.typingLayout
+import ly.anoma.hex.typing.AdaptiveTouchStore
 import ly.anoma.hex.typing.PersonalWords
 import ly.anoma.hex.typing.SpatialDecoder
 import ly.anoma.hex.typing.TypingModel
@@ -105,7 +106,8 @@ class HexKeyboard : InputMethodService() {
             { SpatialDecoder(TypingModel.asset(assets, it)) },
             readPersonal = { PersonalWords.read(contentResolver, it) }, background = words,
             emoji = EmojiWords(assets, words),
-            learned = { if (preferences.learnFixes) fixes.record(it) })
+            learned = { if (preferences.learnFixes) fixes.record(it) },
+            adaptiveTouch = { if (feedback.adaptiveTouch) AdaptiveTouchStore.get(this) else null })
     }
     private val typingChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == TypingPreferences.SUGGEST_SWEAR_WORDS) engine.swearWordsChanged()
@@ -117,6 +119,7 @@ class HexKeyboard : InputMethodService() {
         if (key == TypingPreferences.KEY_HEIGHT) heightChanged()
         if (key == TypingPreferences.SECOND_LANGUAGE) engine.configureTyping()
         if (key == TypingPreferences.PASSWORD_MANAGER_SUGGESTIONS) clearInline()
+        if (key == TypingPreferences.ADAPTIVE_TOUCH) engine.adaptiveTouchChanged()
     }
     /** Labs › Keyboard › Keyboard height changed: the keys are drawn again at once when shown and idle, else
      * when next shown, so a dictation in progress keeps its view. */
