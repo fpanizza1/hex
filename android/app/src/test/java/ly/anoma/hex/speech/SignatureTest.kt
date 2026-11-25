@@ -592,7 +592,8 @@ class ModelChoiceTest {
         assertEquals(0.3, ModelChoice.median(state.ratios)!!, 0.0)
     }
     @Test fun aDictationThatWouldNotGoEnglishNeverCounts() {
-        for (o in listOf(options(DictationLanguage.Spanish), options(translate = true),
+        // Norsk: the one dictation language Parakeet doesn't take (its 25 include Russian and Polish), so Whisper writes it.
+        for (o in listOf(options(DictationLanguage.Norwegian), options(translate = true),
                          options(candidates = listOf(DictationLanguage.English, DictationLanguage.Spanish)))) {
             val s = ModelChoice.sample(times(12_000, 9_000), o)!!
             assertEquals(NotCounted.OtherLanguage, ModelChoice.notCounted(s))
@@ -604,8 +605,8 @@ class ModelChoiceTest {
         assertNull(ModelChoice.notCounted(ModelChoice.sample(times(12_000, 9_000), options(candidates = listOf(DictationLanguage.English)))!!))
     }
     @Test fun oneOtherLanguageInTheLastTwentyStopsIt() {
-        val spanish = ModelChoice.sample(times(12_000, 9_000), options(DictationLanguage.Spanish))!!
-        val state = run(english(20) + slow(4) + spanish + slow(1))
+        val norwegian = ModelChoice.sample(times(12_000, 9_000), options(DictationLanguage.Norwegian))!!
+        val state = run(english(20) + slow(4) + norwegian + slow(1))
         assertEquals(5, state.ratios.size)
         assertEquals(1, state.englishInARow)
         assertFalse(state.decided)
